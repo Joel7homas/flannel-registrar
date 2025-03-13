@@ -1,0 +1,14 @@
+[Unit]
+Description=Flannel Network Boot Setup
+After=network.target
+Before=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/flannel-boot.sh
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

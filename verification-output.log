@@ -1,0 +1,27 @@
+Starting FDB module integration verification
+============================================
+Running test: Module Loading... TEST: Module Loading
+[31mFAILED(B[m
+RESULT: FAILED
+Running test: Cross-Module Function Calls... TEST: Cross-Module Function Calls
+[31mFAILED(B[m
+RESULT: FAILED
+Running test: Callback Registration... TEST: Callback Registration
+[31mFAILED(B[m
+RESULT: FAILED
+Running test: State Sharing... TEST: State Sharing
+[31mFAILED(B[m
+RESULT: FAILED
+Running test: Error Handling... TEST: Error Handling
+[32mPASSED(B[m
+RESULT: PASSED
+Running test: Documentation Consistency... TEST: Documentation Consistency
+[31mFAILED(B[m
+RESULT: FAILED
+============================================
+Test Summary:
+[32mPassed: 1(B[m
+[31mFailed: 5(B[m
+[33mSkipped: 0(B[m
+[31mSome tests failed. See /tmp/flannel-registrar-test/integration-test.log for details.(B[m
+Test logs are available at /tmp/flannel-registrar-test/integration-test.log

@@ -1,0 +1,323 @@
+### Key Changes in 1.1.2
+- Minor bug fix (syntax error)
+
+* * *
+
+### Key Changes in 1.1.1
+
+- Added robust self-healing capabilities for automatic recovery from network issues
+- Completely redesigned architecture with modular components for better maintainability
+- Added comprehensive connectivity testing and active network health monitoring
+- Improved VXLAN interface management with automatic issue detection and recovery
+- Enhanced FDB management for consistent and reliable VXLAN tunnels
+- Added systemd services for host-level recovery operations
+- Improved boot-time handling to ensure proper network initialization
+- Enhanced indirect routing support with more configuration options
+- Added detailed diagnostics and troubleshooting capabilities
+- Improved error handling and logging throughout the system
+
+### Detailed Improvements
+
+#### Self-Healing Network Management
+- Added automatic detection and recovery from stale VXLAN states
+- Implemented interface cycling when connectivity issues are detected
+- Added FDB entry consistency checks and corrections
+- Implemented cross-host notification system for coordinated recovery
+- Added connectivity verification to ensure bidirectional communication
+
+#### Modular Architecture
+- Split functionality into focused modules for easier maintenance:
+  - `connectivity.sh`: Detection and testing functions
+  - `recovery.sh`: Interface and service recovery logic
+  - `fdb-management.sh`: FDB entry handling
+  - `routes.sh`: Route management with gateway support
+  - `monitoring.sh`: Health checking and diagnostics
+
+#### Network Health Monitoring
+- Added active health checking of all flannel subnets
+- Implemented monitoring of VXLAN traffic statistics
+- Added detection of one-way communication issues
+- Added health status reporting through structured JSON
+- Implemented diagnostics collection for troubleshooting
+
+#### Host-Level Recovery
+- Added `flannel-recovery.service` for deep system-level recovery
+- Added `flannel-boot.service` for proper initialization on system startup
+- Implemented cooldown management to prevent recovery loops
+- Added persistent state tracking across reboots
+
+#### Improved Documentation
+- Updated README with comprehensive configuration and troubleshooting information
+- Added detailed documentation for indirect routing setups
+- Added implementation details and architecture diagrams
+- Enhanced setup instructions for various environments
+
+### Breaking Changes
+
+- Changed format of `HOST_GATEWAY_MAP` for more consistent configuration
+- Backend registration now includes `hostname` field for better cross-host identification
+- FDB entries are now managed more aggressively, which may affect custom configurations
+
+### Fixes
+
+- Fixed issue with stale FDB entries after host reboots
+- Fixed MTU handling to ensure consistent 1370 MTU on flannel interfaces
+- Fixed routing issues with WireGuard tunnels
+- Fixed one-way connectivity issues with asymmetric routing
+- Fixed subnet registration with improved hostname handling
+
+* * *
+
+### Key Changes in 1.1.0 
+
+- Added support for complex network topologies with indirect routing
+- Added HOST_GATEWAY_MAP environment variable to specify routing overrides
+- Enhanced route management to handle WireGuard tunnels
+- Added automatic detection of network topology
+- Improved connectivity testing and error reporting
+- Updated VXLAN interface management for better compatibility
+
+* * *
+
+### Key Changes in 1.0.20 
+
+BUGFIX: Resolved network connectivity issues caused by IP conflicts between flannel.1 and Docker networks
+
+- Added automatic detection and remediation of IP address conflicts
+- The flannel.1 interface will now use IP x.x.x.254 when a conflict is detected with Docker networks
+- This fixes cross-host container communication issues that could occur after reboots
+- Ensures stable connectivity for services across all hosts
+
+* * *
+
+### Key Changes in 1.0.19
+
+- **Fixed Syntax Error**
+    - Replaced the unmatched `}` with `fi` in the check_vxlan_interfaces function
+- **Removed grep -P (PCRE) Usage**
+    - Changed all instances of grep -P to use standard BusyBox-compatible grep patterns
+    - Replaced grep -oP commands with grep -o combined with cut or awk where needed
+- **Added Essential Packages to Dockerfile**
+    - Added `bridge-utils` to support bridge commands for FDB management
+    - Included proper network tools with `iproute2`
+- **Enhanced Script Robustness**
+    - Made all parsing functions more resilient with fallback methods
+    - Improved error handling when commands fail
+- **Added Diagnostic Functions**
+    - Added test_flannel_connectivity for quick troubleshooting
+    - Added check_vxlan_interfaces to verify and repair VXLAN interfaces
+
+* * *
+
+### Key Changes in 1.0.18
+
+1.  **Enhanced Route Management**
+    - Improved handling of routes between Flannel subnets
+    - Added special handling for WireGuard networks (culvert)
+    - Added fallback mechanisms for route establishment
+2.  **Added Iptables Management**
+    - Automatically creates and maintains required iptables rules
+    - Ensures bidirectional connectivity between all Flannel subnets
+    - Adds explicit subnet-to-subnet rules
+    - Creates FLANNEL-FWD chain for better organization of rules
+3.  **Code Reorganization**
+    - Split code into modular components for better maintainability:
+        - `etcd-lib.sh`: ETCD interaction functions
+        - `network-lib.sh`: Network and iptables management
+        - `register-docker-networks.sh`: Main script
+        - `docker-entrypoint.sh`: Container startup management
+4.  **VXLAN Interface Verification**
+    - Added functions to verify VXLAN interfaces are properly configured
+    - Checks and fixes MTU settings
+    - Manages FDB entries for remote VTEP endpoints
+5.  **Connectivity Testing**
+    - Added function to test connectivity to all registered subnets
+    - Helps quickly identify routing issues
+
+* * *
+
+### Key Changes in 1.0.17 
+
+FEATURE: Added automatic route management for multi-subnet environments
+- Fixed cross-host connectivity issues between multiple Docker bridge networks
+- Added ensure_flannel_routes() function to create missing routes for remote networks
+- Now requires NET_ADMIN capability and root privileges for route management
+- Addresses "operation not supported" errors in Flannel VXLAN FDB setup
+- Maintains backward compatibility with existing configurations
+
+CHANGES:
+- Updated recommended container configuration to include:
+  * RUN_AS_ROOT=true (required for route management)
+  * cap_add: NET_ADMIN (required for route management)
+- Added route verification during each registration cycle
+- Improved error handling for route management operations
+
+COMPATIBILITY:
+- Compatible with Flannel v0.26.3 and above
+- Tested on TrueNAS Scale 24.10.2 and Ubuntu 24.04/24.10
+- Supports cross-subnet communication via Flannel VXLAN overlay
+ 
+* * *
+
+### Key Fixes in 1.0.16:
+
+- Added the `etcd_delete()` function to allow removing problematic entries
+- Added the `etcd_get()` function to retrieve values from etcd
+- Added the `etcd_list_keys()` function to list all keys with a given prefix
+- Added the `cleanup_localhost_entries()` function that:
+    - Scans for entries with localhost IPs (127.0.0.1)
+    - Removes those entries automatically
+    - Logs what it's doing for visibility
+- Improved the while loop for reading network information with `|| [[ -n "$network_key" ]]` to handle the case of the last line not having a newline
+- Priority use of the `FLANNELD_PUBLIC_IP` environment variable for IP detection
+
+
+* * *
+
+### Key Fixes in 1.0.15:
+
+- Fixed the `while` loop in the `register_networks()` function:
+    - The original had a malformed line with `while IFS=\t' read -r network_key subnet; do`
+    - I corrected it to `while IFS=$'\t' read -r network_key subnet; do`
+- Removed duplicate code:
+    - The script had the `notify_flannel()` function and main execution block duplicated, which caused the syntax error
+    - I removed the duplication to ensure there's only one instance of each function/block
+- Cleaned up tab characters and whitespace issues that might have contributed to parsing problems
+
+* * *
+
+###   Key Fixes in 1.0.14:
+
+- **JSON-based Network Discovery**:
+    - Changed the network discovery to use JSON format from Docker directly
+    - Added proper parsing using `jq` (which we already had in the Dockerfile)
+    - Included a fallback parser for systems without jq
+- **Tab-Separated Values**:
+    - Using tab as the delimiter instead of pipe or colon, which are less likely to appear in network names or subnets
+    - Makes parsing much more reliable
+- **Eliminated Log Capture**:
+    - Completely removed logging during the network listing process
+    - Only log the summary after all networks are collected
+    - Ensures no log lines get mixed with the actual data
+- **Better Error Handling**:
+    - Added more checks for malformed data
+    - Explicit checks for lines that look like log entries
+    - Better counting and reporting of networks found
+
+* * *
+
+### Key Fixes in 1.0.13:  
+1\. Fixed Network Discovery Output
+
+- Changed to use a temporary file to store network information to prevent log lines from being captured by the parser
+- This resolves the "Malformed network info" warnings in your logs where log lines were being treated as network info
+
+ 2\. Improved Daemon Mode Handling
+
+- Made daemon mode the default behavior rather than requiring the `--daemon` flag
+- Added explicit `--once` flag for one-time execution if needed
+- Added better error handling to prevent crashes even if certain operations fail
+
+3\. Enhanced Entrypoint Script
+
+- Added default argument handling to ensure daemon mode
+- Improved command line argument passing
+- Better logging of what command is being executed
+- Added fail-safe error detection
+
+4\. Added Better Status Logging
+
+- Added completion messages for network registration cycles
+- Improved sleep message so you can tell the container is working properly
+
+* * *
+
+### Key Fixes in 1.0.12:
+
+ In the entrypoint script:
+
+1.  **su-exec Instead of su**: Changed to use `su-exec` which properly replaces the current process and maintains signal handling
+2.  **Improved Process Replacement**: Using `exec` ensures proper signal propagation to the child process
+
+In the main script:
+
+1.  **Signal Trap**: Added proper signal handling with a trap for SIGTERM and SIGINT
+2.  **Error Handling**: Added error catching around critical functions to prevent them from crashing the container
+3.  **Improved Logging**: Added a sleep notification so you can see the script is functioning correctly
+
+Additional Improvements:
+
+1.  **Process Isolation**: Used better process isolation to prevent errors in one component from affecting others
+2.  **Improved Daemon Mode**: Better structured the daemon loop with clear error boundaries
+
+* * *
+
+### Key Fixes in 1.0.11:
+
+Added a cleanup routine to the `initialize_etcd` function that will:
+
+1.  Look for any malformed keys that contain telltale signs like timestamps (keys starting with `[`)
+2.  Delete these malformed entries when found
+3.  Log the cleanup process for transparency
+
+* * *
+
+### Key Fixes in 1.0.10:  
+- **Network Parsing Issue**: Changed the delimiter from `:` to `|` since subnet values contain `:` characters, which was breaking the parsing. This was causing the `[2025-03-03 02:27:56]` timestamp to be included in network names.
+- **Base64 Encoding**: Fixed the Base64 encoding by adding the `-w 0` flag to prevent line wrapping, which was causing the "invalid character '\\n' in string literal" error.
+- **JSON Content Type**: Added the proper Content-Type header for the etcd v3 API requests.
+- **IP Detection Issue**: Added better error handling for the IP detection, checking explicitly for "command not found" errors.
+- **Consistent Syntax**: Used more consistent formatting and made the code more robust against unexpected values.
+
+* * *
+
+### Key Fix in 1.0.9: 
+
+Removed etcdctl client because the last fix didn't work
+
+* * *
+
+### Key Fix in 1.0.8: 
+
+Fixed package name for etcdctl client
+
+* * *
+
+### Key Fixes in 1.0.7:
+
+1.  **etcd v3 API Support**: Created new functions `etcd_put` and `etcd_key_exists` that work with the v3 API format, including proper Base64 encoding of keys and values as required by v3.
+2.  **Version Detection**: Added an `ETCDCTL_API` environment variable (defaulting to "3") to control which API version to use, with fallback to v2 if needed.
+3.  **Directory Handling**: Adjusted for the fact that etcd v3 doesn't have the concept of directories - it just has key-value pairs.
+4.  **Base64 Encoding**: Added proper Base64 encoding for keys and values as required by the v3 API.
+5.  **Health Check**: Updated the health check to use the appropriate endpoint.
+6.  **Added etcdctl**: Included `etcd-ctl` in the Docker image for diagnostic purposes.
+
+* * *
+###   Key Fixes in 1.0.6:
+
+1.  **Function Order**: Rearranged the functions so that they're defined before they're called, specifically placing the `initialize_etcd` function before it's referenced in the main execution section.
+2.  **Proper Sequence**: Structured the script in a logical order:
+    - Basic setup (log function, configuration variables)
+    - Helper functions (check_dependencies, create_etcd_dir, initialize_etcd)
+    - Core functionality functions (get_docker_networks, register_network, register_networks, notify_flannel)
+    - Main execution logic
+
+* * *
+
+###   Key Fixes in 1.0.5:
+
+1.  **Proper etcd Directory Initialization**: Created a new `initialize_etcd()` function that explicitly creates all required directories in the proper hierarchy at startup.
+2.  **Subnet Key Format**: Fixed the subnet key format. In your etcd output, I noticed Flannel uses the format `10.5.35.0-24` (with a hyphen) instead of `10.5.35.0/24` (with a slash).
+3.  **IP Detection**: Removed the `ifconfig.me` call (which tries to get the public IP) and focused on using the local IP address from `hostname -I`.
+4.  **Validation Steps**: Added more logging to verify the directory structure exists after initialization.
+5.  **Error Handling**: Improved error reporting to help diagnose issues.
+
+* * *
+
+### Key Fixes in 1.0.4:
+
+1.  **Added Directory Creation Function**: Added a new `ensure_etcd_dir()` function that checks if a directory exists in etcd and creates it if it doesn't.
+2.  **Initialization Check**: The script now ensures required directories exist in etcd before attempting to register networks.
+3.  **Better Error Handling**: Improved response handling for curl commands with proper checking for success conditions.
+4.  **Limited Error Output**: Truncated error messages to avoid flooding logs while still providing useful information.
+5.  **Safer Command Execution**: Added more null checks and error handling for command execution.

@@ -1,0 +1,20 @@
+flannel-registrar/
+├── Dockerfile
+├── docker-compose.yml
+├── docker-entrypoint.sh
+├── register-docker-networks.sh
+├── release_notes.txt
+├── README.md
+├── flannel-indirect-routing-docs.md
+├── lib/
+│   ├── etcd-lib.sh
+│   ├── connectivity.sh
+│   ├── recovery.sh
+│   ├── fdb-management.sh
+│   ├── routes.sh
+│   └── monitoring.sh
+└── systemd/
+    ├── flannel-recovery.service
+    ├── flannel-recovery.sh
+    ├── flannel-boot.service
+    └── flannel-boot.sh
