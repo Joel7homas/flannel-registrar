@@ -22,6 +22,7 @@ RECOVERY_STATE_FILE="${RECOVERY_STATE_DIR}/recovery_state.json"
 RECOVERY_LEVEL_INTERFACE="interface"
 RECOVERY_LEVEL_CONTAINER="container"
 RECOVERY_LEVEL_SERVICE="service"
+RECOVERY_LEVEL_NONE="none"  # Added missing recovery level constant
 
 # Configurable cooldown periods (in seconds)
 RECOVERY_INTERFACE_COOLDOWN=${RECOVERY_INTERFACE_COOLDOWN:-0}      # No cooldown for interface level
@@ -60,11 +61,11 @@ init_recovery_state() {
     touch "$RECOVERY_HISTORY_FILE" 2>/dev/null || {
         log "WARNING" "Failed to create recovery history file, will retry later"
     }
-    
+
     touch "$RECOVERY_ATTEMPTS_FILE" 2>/dev/null || {
         log "WARNING" "Failed to create recovery attempts file, will retry later"
     }
-    
+
     if [ ! -f "$RECOVERY_STATE_FILE" ]; then
         # Create empty state file with minimal structure
         echo "{\"cooldowns\":{},\"last_success\":{}}" > "$RECOVERY_STATE_FILE" 2>/dev/null || {
@@ -132,19 +133,20 @@ save_recovery_attempt() {
     
     # Append to history file
     echo "$history_entry" >> "$RECOVERY_HISTORY_FILE" || {
-        log "ERROR" "Failed to write to recovery history file"
+        log "ERROR" "Failed to write to recovery history file: $RECOVERY_HISTORY_FILE"
         return 1
     }
     
     # Update attempts file
     echo "${attempt_key}=${RECOVERY_ATTEMPTS[$attempt_key]}" >> "$RECOVERY_ATTEMPTS_FILE.new" || {
-        log "ERROR" "Failed to update recovery attempts file"
+        log "ERROR" "Failed to update recovery attempts file: $RECOVERY_ATTEMPTS_FILE.new"
         return 1
     }
     
     # Save state to disk
     save_recovery_state || {
-        log "WARNING" "Failed to save recovery state"
+        log "WARNING" "Failed to save recovery state after recording attempt"
+        return 1
     }
     
     log "INFO" "Recorded recovery attempt: $component, $action, $result"
@@ -168,7 +170,7 @@ get_recovery_attempts() {
     
     # Validate inputs
     if [ -z "$component" ] || [ -z "$action" ]; then
-        log "ERROR" "Missing required parameters for get_recovery_attempts"
+        log "ERROR" "Missing required parameters for get_recovery_attempts: component=$component, action=$action"
         return 0
     fi
     
@@ -219,7 +221,7 @@ update_cooldown_timestamp() {
     
     # Validate input
     if [ -z "$action" ]; then
-        log "ERROR" "Missing required parameter for update_cooldown_timestamp"
+        log "ERROR" "Missing required parameter for update_cooldown_timestamp: action not specified"
         return 1
     fi
     
@@ -228,7 +230,7 @@ update_cooldown_timestamp() {
     
     # Save state to disk
     save_recovery_state || {
-        log "WARNING" "Failed to save recovery state after updating cooldown"
+        log "WARNING" "Failed to save recovery state after updating cooldown for $action"
         return 1
     }
     
@@ -249,7 +251,7 @@ is_in_cooldown() {
     
     # Validate input
     if [ -z "$action" ]; then
-        log "ERROR" "Missing required parameter for is_in_cooldown"
+        log "ERROR" "Missing required parameter for is_in_cooldown: action not specified"
         return 1  # Not in cooldown (safety default)
     fi
     
@@ -327,7 +329,7 @@ prune_old_history() {
     if [ -f "$temp_file" ]; then
         # Replace history file with filtered version
         mv "$temp_file" "$RECOVERY_HISTORY_FILE" || {
-            log "ERROR" "Failed to update history file during pruning"
+            log "ERROR" "Failed to update history file during pruning: mv $temp_file $RECOVERY_HISTORY_FILE"
             rm -f "$temp_file"
             return 1
         }
@@ -412,7 +414,7 @@ save_recovery_state() {
     
     # Atomically replace state file
     mv "$temp_file" "$RECOVERY_STATE_FILE" || {
-        log "ERROR" "Failed to update recovery state file"
+        log "ERROR" "Failed to update recovery state file: mv $temp_file $RECOVERY_STATE_FILE"
         rm -f "$temp_file"
         return 1
     }
@@ -425,7 +427,7 @@ save_recovery_state() {
     
     # Atomically replace attempts file
     mv "$RECOVERY_ATTEMPTS_FILE.new" "$RECOVERY_ATTEMPTS_FILE" || {
-        log "ERROR" "Failed to update recovery attempts file"
+        log "ERROR" "Failed to update recovery attempts file: mv $RECOVERY_ATTEMPTS_FILE.new $RECOVERY_ATTEMPTS_FILE"
         return 1
     }
     
@@ -501,7 +503,7 @@ get_last_recovery_timestamp() {
     
     # Validate input
     if [ -z "$component" ]; then
-        log "ERROR" "Missing required parameter for get_last_recovery_timestamp"
+        log "ERROR" "Missing required parameter for get_last_recovery_timestamp: component not specified"
         return 0
     fi
     
@@ -531,6 +533,7 @@ export RECOVERY_STATE_DIR
 export RECOVERY_LEVEL_INTERFACE
 export RECOVERY_LEVEL_CONTAINER
 export RECOVERY_LEVEL_SERVICE
+export RECOVERY_LEVEL_NONE
 export RECOVERY_INTERFACE_COOLDOWN
 export RECOVERY_CONTAINER_COOLDOWN
 export RECOVERY_SERVICE_COOLDOWN

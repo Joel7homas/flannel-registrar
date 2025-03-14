@@ -18,11 +18,8 @@ RECOVERY_MAX_INTERFACE_ATTEMPTS=${RECOVERY_MAX_INTERFACE_ATTEMPTS:-3}
 RECOVERY_MAX_CONTAINER_ATTEMPTS=${RECOVERY_MAX_CONTAINER_ATTEMPTS:-2}
 RECOVERY_MAX_SERVICE_ATTEMPTS=${RECOVERY_MAX_SERVICE_ATTEMPTS:-1}
 
-# Recovery level constants
-RECOVERY_LEVEL_NONE="none"
-RECOVERY_LEVEL_INTERFACE="interface"
-RECOVERY_LEVEL_CONTAINER="container"
-RECOVERY_LEVEL_SERVICE="service"
+# Recovery level constants - Use the ones exported from recovery-state.sh
+# removed duplicate definitions of cooldown constants
 
 # Status tracking
 RECOVERY_LAST_CHECK_TIME=0
@@ -36,13 +33,40 @@ RECOVERY_CURRENT_LEVEL="$RECOVERY_LEVEL_NONE"
 # Usage: init_recovery_core
 # Returns: 0 on success, 1 on failure
 init_recovery_core() {
-    # Check dependencies
-    for dep in log get_all_component_statuses save_recovery_attempt; do
-        if ! type "$dep" &>/dev/null; then
-            echo "ERROR: Required function '$dep' not found. Make sure all dependencies are loaded."
-            return 1
+    # Check dependencies more thoroughly
+    local missing_dependencies=false
+    
+    # Required functions from dependencies
+    local required_functions=(
+        "log" 
+        "get_all_component_statuses" 
+        "get_component_status"
+        "get_system_status"
+        "save_recovery_attempt"
+        "update_cooldown_timestamp"
+        "is_in_cooldown"
+        "get_recovery_attempts"
+        "get_recovery_history"
+    )
+    
+    # Check each required function
+    for func in "${required_functions[@]}"; do
+        if ! type "$func" &>/dev/null; then
+            echo "ERROR: Required function '$func' not found. Make sure all dependencies are loaded."
+            missing_dependencies=true
         fi
     done
+    
+    # Check recovery level constants from recovery-state.sh
+    if [ -z "$RECOVERY_LEVEL_INTERFACE" ] || [ -z "$RECOVERY_LEVEL_CONTAINER" ] || \
+       [ -z "$RECOVERY_LEVEL_SERVICE" ] || [ -z "$RECOVERY_LEVEL_NONE" ]; then
+        echo "ERROR: Required recovery level constants not defined in recovery-state.sh"
+        missing_dependencies=true
+    fi
+    
+    if $missing_dependencies; then
+        return 1
+    fi
 
     # Set initial recovery level
     RECOVERY_CURRENT_LEVEL="$RECOVERY_LEVEL_NONE"
@@ -106,6 +130,12 @@ run_recovery_sequence() {
             continue
         fi
         
+        # Check recent recovery history to inform decisions
+        local recent_failures=$(get_recovery_history "general" 5 | grep -c "failure" || echo "0")
+        if [ "$recent_failures" -gt 3 ]; then
+            log "WARNING" "Multiple recent recovery failures detected ($recent_failures), consider manual intervention"
+        fi
+        
         # Perform recovery based on current level
         case "$RECOVERY_CURRENT_LEVEL" in
             "$RECOVERY_LEVEL_INTERFACE")
@@ -141,9 +171,11 @@ run_recovery_sequence() {
                 ;;
         esac
         
-        # Record the recovery attempt
-        save_recovery_attempt "general" "recovery_${RECOVERY_CURRENT_LEVEL}" "attempted" \
-            "Recovery attempted at ${RECOVERY_CURRENT_LEVEL} level"
+        # Record the recovery attempt with proper error handling
+        if ! save_recovery_attempt "general" "recovery_${RECOVERY_CURRENT_LEVEL}" "attempted" \
+            "Recovery attempted at ${RECOVERY_CURRENT_LEVEL} level"; then
+            log "WARNING" "Failed to save recovery attempt state, continuing anyway"
+        fi
         
         # Wait a bit before checking if recovery was successful
         log "INFO" "Waiting 15 seconds before verifying recovery success"
@@ -153,14 +185,21 @@ run_recovery_sequence() {
         if verify_recovery_success "$components"; then
             log "INFO" "Recovery successful at level $RECOVERY_CURRENT_LEVEL"
             recovery_success=true
-            save_recovery_attempt "general" "recovery_${RECOVERY_CURRENT_LEVEL}" "success" \
-                "Recovery succeeded at ${RECOVERY_CURRENT_LEVEL} level"
+            
+            if ! save_recovery_attempt "general" "recovery_${RECOVERY_CURRENT_LEVEL}" "success" \
+                "Recovery succeeded at ${RECOVERY_CURRENT_LEVEL} level"; then
+                log "WARNING" "Failed to save recovery success state, continuing anyway"
+            fi
+            
             reset_recovery_state
             break
         else
             log "WARNING" "Recovery at level $RECOVERY_CURRENT_LEVEL did not resolve issues"
-            save_recovery_attempt "general" "recovery_${RECOVERY_CURRENT_LEVEL}" "failure" \
-                "Recovery failed at ${RECOVERY_CURRENT_LEVEL} level"
+            
+            if ! save_recovery_attempt "general" "recovery_${RECOVERY_CURRENT_LEVEL}" "failure" \
+                "Recovery failed at ${RECOVERY_CURRENT_LEVEL} level"; then
+                log "WARNING" "Failed to save recovery failure state, continuing anyway"
+            fi
             
             # Try next recovery level
             RECOVERY_CURRENT_LEVEL=$(increase_recovery_level "$RECOVERY_CURRENT_LEVEL")
@@ -328,8 +367,10 @@ cycle_flannel_interface() {
         ip link set "$interface" mtu "$current_mtu"
     fi
     
-    # Update cooldown timestamp for interface-level recovery
-    update_cooldown_timestamp "recovery_${RECOVERY_LEVEL_INTERFACE}"
+    # Update cooldown timestamp for interface-level recovery with error handling
+    if ! update_cooldown_timestamp "recovery_${RECOVERY_LEVEL_INTERFACE}"; then
+        log "WARNING" "Failed to update cooldown timestamp for interface recovery"
+    fi
     
     log "INFO" "Successfully cycled interface $interface"
     return 0
@@ -345,8 +386,10 @@ restart_flannel_container() {
     # Placeholder for actual implementation
     # In the future, this will delegate to recovery-actions.sh
     
-    # Simulate success for testing
-    update_cooldown_timestamp "recovery_${RECOVERY_LEVEL_CONTAINER}"
+    # Simulate success for testing with error handling
+    if ! update_cooldown_timestamp "recovery_${RECOVERY_LEVEL_CONTAINER}"; then
+        log "WARNING" "Failed to update cooldown timestamp for container recovery"
+    fi
     
     return 0
 }
@@ -367,8 +410,10 @@ restart_docker_service() {
     # Placeholder for actual implementation or delegation
     log "INFO" "This function would delegate to host-level services in production"
     
-    # Simulate success for testing
-    update_cooldown_timestamp "recovery_${RECOVERY_LEVEL_SERVICE}"
+    # Simulate success for testing with error handling
+    if ! update_cooldown_timestamp "recovery_${RECOVERY_LEVEL_SERVICE}"; then
+        log "WARNING" "Failed to update cooldown timestamp for service recovery"
+    fi
     
     # Return success for simulation purposes
     return 0
@@ -388,6 +433,14 @@ verify_recovery_success() {
     local success=true
     local retry_attempts=3
     local wait_time=15
+    
+    # Check recovery history for insights
+    local recent_history=$(get_recovery_history "general" 3)
+    local recent_success_count=$(echo "$recent_history" | grep -c "success" || echo "0")
+    
+    if [ "$recent_success_count" -gt 0 ]; then
+        log "INFO" "Recent successful recoveries detected, increasing confidence"
+    fi
     
     # If no components specified, check system status
     if [ -z "$components" ]; then
@@ -449,6 +502,13 @@ verify_recovery_success() {
         sleep $wait_time
         wait_time=$((wait_time + 5))  # Increase wait time for next attempt
     done
+    
+    # Get last recovery timestamp for additional information
+    local last_timestamp=$(get_last_recovery_timestamp "general" || echo "0")
+    if [ "$last_timestamp" -gt 0 ]; then
+        local time_since=$(($(date +%s) - last_timestamp))
+        log "INFO" "Last successful recovery was $time_since seconds ago"
+    fi
     
     log "WARNING" "Recovery verification failed - components still have issues"
     return 1
@@ -526,8 +586,4 @@ export RECOVERY_CHECK_INTERVAL
 export RECOVERY_MAX_INTERFACE_ATTEMPTS
 export RECOVERY_MAX_CONTAINER_ATTEMPTS
 export RECOVERY_MAX_SERVICE_ATTEMPTS
-export RECOVERY_LEVEL_NONE
-export RECOVERY_LEVEL_INTERFACE
-export RECOVERY_LEVEL_CONTAINER
-export RECOVERY_LEVEL_SERVICE
 export RECOVERY_CURRENT_LEVEL
