@@ -228,38 +228,41 @@ _etcd_v3_delete() {
 
 # List keys with a prefix from etcd v3
 # Usage: keys=$(_etcd_v3_list_keys "/prefix")
+# Enhanced _etcd_v3_list_keys function with better key handling
 _etcd_v3_list_keys() {
     local prefix="$1"
-    
+
     local base64_prefix=$(_etcd_base64_encode "$prefix")
     local base64_end=$(_etcd_base64_encode "${prefix}\xff")
-    
+
     # Create JSON payload
     local payload="{\"key\":\"$base64_prefix\",\"range_end\":\"$base64_end\",\"keys_only\":true}"
-    
+
     log "DEBUG" "Sending etcd v3 LIST KEYS: $prefix"
-    
+
     # Send request to etcd
     local response=$(curl -s -X POST -m "$ETCD_TIMEOUT" \
         "${ETCD_ENDPOINT}/v3/kv/range" \
         -H "Content-Type: application/json" \
         -d "$payload" 2>&1)
-    
+
     # Check response
     if echo "$response" | grep -q "\"kvs\""; then
-        # Extract and decode the keys
+        # Extract and decode the keys with proper newline handling
         if command -v jq &>/dev/null; then
-            # Use jq if available
+            # Use jq if available for more reliable parsing
             echo "$response" | jq -r '.kvs[].key' | while read -r base64_key; do
                 if [ -n "$base64_key" ]; then
-                    _etcd_base64_decode "$base64_key"
+                    decoded_key=$(_etcd_base64_decode "$base64_key")
+                    echo "$decoded_key"  # Each key on its own line
                 fi
             done
         else
-            # Fall back to grep/sed
+            # Fall back to grep/sed but ensure each key is on its own line
             echo "$response" | grep -o '"key":"[^"]*"' | cut -d'"' -f4 | while read -r base64_key; do
                 if [ -n "$base64_key" ]; then
-                    _etcd_base64_decode "$base64_key"
+                    decoded_key=$(_etcd_base64_decode "$base64_key")
+                    echo "$decoded_key"  # Each key on its own line
                 fi
             done
         fi
@@ -525,22 +528,70 @@ initialize_etcd() {
 cleanup_localhost_entries() {
     log "INFO" "Checking for etcd entries with localhost IPs..."
     
-    # Get all subnet entries
-    local subnet_keys
-    subnet_keys=$(etcd_list_keys "${FLANNEL_PREFIX}/subnets/")
-    
-    if [[ -z "$subnet_keys" ]]; then
-        log "WARNING" "No subnet entries found or could not access etcd"
-        return 1
+    # First check if we can connect to etcd at all
+    if ! _etcd_check_connectivity; then
+        log "WARNING" "Cannot connect to etcd at $ETCD_ENDPOINT during cleanup_localhost_entries"
+        log "WARNING" "This may be due to the network connectivity issues that flannel-registrar is designed to fix"
+        log "WARNING" "Will continue startup process and retry later during normal operation"
+        return 0  # Return success to allow the process to continue
     fi
     
-    local cleaned_count=0
+    log "DEBUG" "Etcd connectivity verified, proceeding with cleanup"
     
-    # Process each subnet key
-    for key in $subnet_keys; do
-        # Get the subnet value (JSON data)
-        local subnet_data
+    # Get all subnet entries
+    log "DEBUG" "Attempting to list subnet keys from ${FLANNEL_PREFIX}/subnets/"
+    local subnet_keys=""
+    
+    # Try to get subnet keys with error handling
+    set +e  # Disable exit on error temporarily
+    subnet_keys=$(etcd_list_keys "${FLANNEL_PREFIX}/subnets/")
+    local list_result=$?
+    set -e  # Re-enable exit on error
+    
+    # Check if the key listing failed
+    if [[ $list_result -ne 0 ]]; then
+        log "WARNING" "Failed to list subnet keys from ${FLANNEL_PREFIX}/subnets/"
+        log "WARNING" "Skipping localhost cleanup for now, will retry during normal operation"
+        return 0  # Return success to allow the process to continue
+    fi
+    
+    # Check if we got any keys back
+    if [[ -z "$subnet_keys" ]]; then
+        log "INFO" "No subnet entries found in ${FLANNEL_PREFIX}/subnets/ - this may be normal for a fresh installation"
+        return 0
+    fi
+    
+    log "DEBUG" "Found $(echo "$subnet_keys" | wc -l) subnet keys to check"
+    
+    local cleaned_count=0
+    local error_count=0
+    
+    # Process each subnet key with careful error handling
+    while read -r key; do
+        # Skip empty lines
+        [ -z "$key" ] && continue
+        
+        log "DEBUG" "Checking subnet key: $key"
+        
+        # Get the subnet value (JSON data) with error handling
+        local subnet_data=""
+        set +e  # Disable exit on error temporarily
         subnet_data=$(etcd_get "$key")
+        local get_result=$?
+        set -e  # Re-enable exit on error
+        
+        # Check if the get operation failed
+        if [[ $get_result -ne 0 ]]; then
+            log "WARNING" "Failed to get data for key $key"
+            error_count=$((error_count + 1))
+            continue
+        fi
+        
+        # Skip if no data
+        if [[ -z "$subnet_data" ]]; then
+            log "DEBUG" "No data found for key $key, skipping"
+            continue
+        fi
         
         # Check if the data contains "PublicIP":"127.0.0.1"
         if [[ "$subnet_data" == *"\"PublicIP\":\"127.0.0.1\""* ]]; then
@@ -548,21 +599,32 @@ cleanup_localhost_entries() {
             
             # Extract subnet from key
             local subnet_id=$(basename "$key")
+            log "DEBUG" "Extracted subnet ID: $subnet_id"
             
-            # Delete the key
+            # Delete the key with error handling
+            set +e  # Disable exit on error temporarily
             if etcd_delete "$key"; then
                 log "INFO" "Successfully deleted localhost entry: $key"
                 cleaned_count=$((cleaned_count + 1))
             else
-                log "ERROR" "Failed to delete localhost entry: $key"
+                log "WARNING" "Failed to delete localhost entry: $key"
+                error_count=$((error_count + 1))
             fi
+            set -e  # Re-enable exit on error
+        else 
+            log "DEBUG" "Key $key does not contain localhost IP, skipping"
         fi
-    done
+    done <<< "$subnet_keys"
     
     if [[ $cleaned_count -gt 0 ]]; then
         log "INFO" "Cleaned up $cleaned_count entries with localhost IPs"
-    else
+    else 
         log "INFO" "No localhost IP entries found"
+    fi
+    
+    if [[ $error_count -gt 0 ]]; then
+        log "WARNING" "Encountered $error_count errors during localhost cleanup"
+        # Still return 0 to allow the process to continue
     fi
     
     return 0

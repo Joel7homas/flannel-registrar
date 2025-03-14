@@ -367,27 +367,80 @@ main() {
   
   # Load remaining modules
   if [ -f "${MODULE_DIR}/network-lib.sh" ]; then
-    load_module "network-lib" || exit 1
+      load_module "network-lib" || exit 1
   else
-    log "WARNING" "network-lib.sh not found, using stub functions"
-    # Ensure host gateway map is parsed
-    parse_host_gateway_map
+      log "WARNING" "network-lib.sh not found, using stub functions"
+      # Ensure host gateway map is parsed
+      parse_host_gateway_map
   fi
   
   log "INFO" "Loading remaining modules"
-  OPTIONAL_MODULES=("connectivity" "recovery" "fdb-management" "routes" "monitoring")
   
-  for module in "${OPTIONAL_MODULES[@]}"; do
-    if [ -f "${MODULE_DIR}/${module}.sh" ]; then
-      if check_module_dependencies "$module"; then
-        load_module "$module" || log "WARNING" "Failed to load optional module: $module"
-      else
-        log "WARNING" "Skipping module $module due to missing dependencies"
+  # Load modules in dependency order
+  # Routes modules
+  if [ -f "${MODULE_DIR}/routes-core.sh" ]; then
+      load_module "routes-core" || log "WARNING" "Failed to load routes-core module"
+      
+      if [ -f "${MODULE_DIR}/routes-advanced.sh" ]; then
+          load_module "routes-advanced" || log "WARNING" "Failed to load routes-advanced module"
       fi
-    else
-      log "DEBUG" "Optional module not found: $module"
-    fi
-  done
+  fi
+  
+  # FDB management modules
+  if [ -f "${MODULE_DIR}/fdb-core.sh" ]; then
+      load_module "fdb-core" || log "WARNING" "Failed to load fdb-core module"
+      
+      if [ -f "${MODULE_DIR}/fdb-advanced.sh" ]; then
+          load_module "fdb-advanced" || log "WARNING" "Failed to load fdb-advanced module"
+      fi
+      
+      if [ -f "${MODULE_DIR}/fdb-diagnostics-core.sh" ]; then
+          load_module "fdb-diagnostics-core" || log "WARNING" "Failed to load fdb-diagnostics-core module"
+      fi
+  fi
+  
+  # Connectivity modules
+  if [ -f "${MODULE_DIR}/connectivity-core.sh" ]; then
+      load_module "connectivity-core" || log "WARNING" "Failed to load connectivity-core module"
+      
+      if [ -f "${MODULE_DIR}/connectivity-diagnostics.sh" ]; then
+          load_module "connectivity-diagnostics" || log "WARNING" "Failed to load connectivity-diagnostics module"
+      fi
+  fi
+  
+  # Monitoring modules
+  if [ -f "${MODULE_DIR}/monitoring-core.sh" ]; then
+      load_module "monitoring-core" || log "WARNING" "Failed to load monitoring-core module"
+      
+      if [ -f "${MODULE_DIR}/monitoring-network.sh" ]; then
+          load_module "monitoring-network" || log "WARNING" "Failed to load monitoring-network module"
+      fi
+      
+      if [ -f "${MODULE_DIR}/monitoring-reporting.sh" ]; then
+          load_module "monitoring-reporting" || log "WARNING" "Failed to load monitoring-reporting module"
+      fi
+      
+      if [ -f "${MODULE_DIR}/monitoring-system.sh" ]; then
+          load_module "monitoring-system" || log "WARNING" "Failed to load monitoring-system module"
+      fi
+  fi
+  
+  # Recovery modules
+  if [ -f "${MODULE_DIR}/recovery-state.sh" ]; then
+      load_module "recovery-state" || log "WARNING" "Failed to load recovery-state module"
+      
+      if [ -f "${MODULE_DIR}/recovery-core.sh" ]; then
+          load_module "recovery-core" || log "WARNING" "Failed to load recovery-core module"
+          
+          if [ -f "${MODULE_DIR}/recovery-actions.sh" ]; then
+              load_module "recovery-actions" || log "WARNING" "Failed to load recovery-actions module"
+          fi
+          
+          if [ -f "${MODULE_DIR}/recovery-monitoring.sh" ]; then
+              load_module "recovery-monitoring" || log "WARNING" "Failed to load recovery-monitoring module"
+          fi
+      fi
+  fi
   
   # Initialize etcd structure
   log "INFO" "Initializing etcd structure"
