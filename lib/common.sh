@@ -49,23 +49,23 @@ log() {
         "DEBUG")
             # Only log DEBUG if debug mode is enabled
             if [ "$DEBUG" = "true" ]; then
-                echo -e "[DEBUG] $timestamp - $message"
+                echo -e "[DEBUG] $timestamp - $message" >&2
             fi
             ;;
         "INFO")
-            echo -e "[INFO] $timestamp - $message"
+            echo -e "[INFO] $timestamp - $message" >&2
             ;;
         "WARNING")
-            echo -e "[WARNING] $timestamp - $message"
+            echo -e "[WARNING] $timestamp - $message" >&2
             ;;
         "ERROR")
-            echo -e "[ERROR] $timestamp - $message"
+            echo -e "[ERROR] $timestamp - $message" >&2
             ;;
         "CRITICAL")
-            echo -e "[CRITICAL] $timestamp - $message"
+            echo -e "[CRITICAL] $timestamp - $message" >&2
             ;;
         *)
-            echo "$timestamp - $message"
+            echo "$timestamp - $message" >&2
             ;;
     esac
 }

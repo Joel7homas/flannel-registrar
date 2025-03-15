@@ -64,25 +64,25 @@ init_etcd_lib() {
 # Check connectivity to etcd
 # Returns 0 if successful, 1 otherwise
 _etcd_check_connectivity() {
-    log "DEBUG" "Checking connectivity to etcd at $ETCD_ENDPOINT" >&2
+    log "DEBUG" "Checking connectivity to etcd at $ETCD_ENDPOINT" 
     
     if [[ "$ETCDCTL_API" == "3" ]]; then
         # Check etcd v3 health
         local response=$(curl -s -m "$ETCD_TIMEOUT" "${ETCD_ENDPOINT}/health" 2>&1)
         if echo "$response" | grep -q "true"; then
-            log "DEBUG" "Successfully connected to etcd v3" >&2
+            log "DEBUG" "Successfully connected to etcd v3" 
             return 0
         fi
     else
         # Check etcd v2 health
         local response=$(curl -s -m "$ETCD_TIMEOUT" "${ETCD_ENDPOINT}/health" 2>&1)
         if echo "$response" | grep -q "true"; then
-            log "DEBUG" "Successfully connected to etcd v2" >&2
+            log "DEBUG" "Successfully connected to etcd v2" 
             return 0
         fi
     fi
     
-    log "ERROR" "Failed to connect to etcd at $ETCD_ENDPOINT" >&2
+    log "ERROR" "Failed to connect to etcd at $ETCD_ENDPOINT" 
     return 1
 }
 
@@ -169,7 +169,7 @@ _etcd_v3_get() {
     local payload="{\"key\":\"$base64_key\"}"
     
     # Log to stderr to avoid mixing with return values
-    log "DEBUG" "Sending etcd v3 GET: $key" >&2
+    log "DEBUG" "Sending etcd v3 GET: $key" 
     
     # Send request to etcd
     local response=$(curl -s -X POST -m "$ETCD_TIMEOUT" \
@@ -186,13 +186,13 @@ _etcd_v3_get() {
             base64_value=$(echo "$response" | jq -r '.kvs[0].value' 2>/dev/null)
             # Check if jq returned an error or null
             if [ $? -ne 0 ] || [ "$base64_value" = "null" ]; then
-                log "DEBUG" "jq failed to extract value from etcd response" >&2
+                log "DEBUG" "jq failed to extract value from etcd response" 
                 return 1
             fi
         else
             base64_value=$(echo "$response" | grep -o '"value":"[^"]*"' | head -1 | cut -d'"' -f4)
             if [ -z "$base64_value" ]; then
-                log "DEBUG" "Failed to extract value from etcd response using grep" >&2
+                log "DEBUG" "Failed to extract value from etcd response using grep" 
                 return 1
             fi
         fi
@@ -204,7 +204,7 @@ _etcd_v3_get() {
         fi
     fi
     
-    log "DEBUG" "etcd v3 GET failed or key not found: $key" >&2
+    log "DEBUG" "etcd v3 GET failed or key not found: $key" 
     return 1
 }
 
@@ -249,7 +249,7 @@ _etcd_v3_list_keys() {
     local payload="{\"key\":\"$base64_prefix\",\"range_end\":\"$base64_end\",\"keys_only\":true}"
 
     # Log to stderr to avoid mixing with return values
-    log "DEBUG" "Sending etcd v3 LIST KEYS: $prefix" >&2
+    log "DEBUG" "Sending etcd v3 LIST KEYS: $prefix" 
 
     # Send request to etcd
     local response=$(curl -s -X POST -m "$ETCD_TIMEOUT" \
@@ -259,7 +259,7 @@ _etcd_v3_list_keys() {
 
     # Validate response before processing
     if ! echo "$response" | grep -q "\"kvs\""; then
-        log "DEBUG" "etcd v3 LIST KEYS failed or no keys found: $prefix" >&2
+        log "DEBUG" "etcd v3 LIST KEYS failed or no keys found: $prefix" 
         return 1
     fi
 
