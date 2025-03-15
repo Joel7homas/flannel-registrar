@@ -371,7 +371,7 @@ ensure_flannel_routes() {
             fi
             
             # If no gateway found and we have an auto-detected one, use that
-            if [ -z "$gateway" ] && [ -n "${DETECTED_GATEWAYS[$public_ip]}" ]; then
+            if [ -z "$gateway" ] && [ -n "$public_ip" ] && [ -n "${DETECTED_GATEWAYS[$public_ip]:-}" ]; then
                 gateway="${DETECTED_GATEWAYS[$public_ip]}"
                 log "DEBUG" "Using auto-detected gateway for $public_ip: $gateway"
             fi
