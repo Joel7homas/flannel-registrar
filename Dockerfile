@@ -1,6 +1,6 @@
 FROM alpine:3.18
 
-LABEL version="1.2.0-alpha.3"
+ARG VERSION=1.2.0-alpha.5
 
 # Install required packages
 RUN apk add --no-cache \
@@ -71,7 +71,9 @@ ENV ETCD_ENDPOINT=http://127.0.0.1:2379 \
     HOST_NAME=auto \
     ETCDCTL_API=3 \
     DEBUG=true \
-    VERSION=1.2.0-alpha.3
+    VERSION=${VERSION}
+
+LABEL version="${VERSION}"
 
 # Set script as entrypoint
 ENTRYPOINT ["/docker-entrypoint.sh"]
