@@ -168,7 +168,8 @@ _etcd_v3_get() {
     # Create JSON payload
     local payload="{\"key\":\"$base64_key\"}"
     
-    log "DEBUG" "Sending etcd v3 GET: $key"
+    # Log to stderr to avoid mixing with return values
+    log "DEBUG" "Sending etcd v3 GET: $key" >&2
     
     # Send request to etcd
     local response=$(curl -s -X POST -m "$ETCD_TIMEOUT" \
@@ -182,19 +183,28 @@ _etcd_v3_get() {
         # Use grep/cut for compatibility with systems without jq
         local base64_value
         if command -v jq &>/dev/null; then
-            base64_value=$(echo "$response" | jq -r '.kvs[0].value')
+            base64_value=$(echo "$response" | jq -r '.kvs[0].value' 2>/dev/null)
+            # Check if jq returned an error or null
+            if [ $? -ne 0 ] || [ "$base64_value" = "null" ]; then
+                log "DEBUG" "jq failed to extract value from etcd response" >&2
+                return 1
+            fi
         else
             base64_value=$(echo "$response" | grep -o '"value":"[^"]*"' | head -1 | cut -d'"' -f4)
+            if [ -z "$base64_value" ]; then
+                log "DEBUG" "Failed to extract value from etcd response using grep" >&2
+                return 1
+            fi
         fi
         
         # Decode and return the value
         if [ -n "$base64_value" ]; then
-            _etcd_base64_decode "$base64_value"
-            return 0
+            _etcd_base64_decode "$base64_value" 2>/dev/null
+            return $?
         fi
     fi
     
-    log "DEBUG" "etcd v3 GET failed or key not found: $key"
+    log "DEBUG" "etcd v3 GET failed or key not found: $key" >&2
     return 1
 }
 

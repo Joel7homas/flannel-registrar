@@ -102,6 +102,132 @@ is_valid_route_interface() {
     return 0
 }
 
+# Improve the validation in ensure_flannel_routes() or similar functions
+validate_subnet() {
+    local subnet="$1"
+    
+    # Skip anything that looks like a date (YYYY/MM/DD format)
+    if [[ "$subnet" =~ ^[0-9]{4}/[0-9]{2}/[0-9]{2}$ ]]; then
+        log "DEBUG" "Skipping date-like subnet: $subnet" >&2
+        return 1
+    fi
+    
+    # Ensure subnet is in CIDR format (IP/mask)
+    if ! [[ "$subnet" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$ ]]; then
+        log "WARNING" "Invalid subnet format: $subnet" >&2
+        return 1
+    fi
+    
+    # Validate IP portion
+    local ip=$(echo "$subnet" | cut -d'/' -f1)
+    local octets=(${ip//./ })
+    if [ ${#octets[@]} -ne 4 ]; then
+        log "WARNING" "Invalid IP in subnet: $subnet" >&2
+        return 1
+    fi
+    
+    for octet in "${octets[@]}"; do
+        if ! [[ "$octet" =~ ^[0-9]+$ ]] || [ "$octet" -gt 255 ]; then
+            log "WARNING" "Invalid octet in subnet IP: $subnet" >&2
+            return 1
+        fi
+    done
+    
+    # Validate mask portion
+    local mask=$(echo "$subnet" | cut -d'/' -f2)
+    if ! [[ "$mask" =~ ^[0-9]+$ ]] || [ "$mask" -lt 1 ] || [ "$mask" -gt 32 ]; then
+        log "WARNING" "Invalid mask in subnet: $subnet" >&2
+        return 1
+    fi
+    
+    return 0
+}
+
+# function to troubleshoot etcd data retrieval
+debug_etcd_subnet_data() {
+    local subnet_key="$1"
+    log "DEBUG" "Debugging subnet data for: $subnet_key" >&2
+    
+    # Get the data with error handling
+    local subnet_data=""
+    set +e
+    subnet_data=$(etcd_get "$subnet_key")
+    local get_result=$?
+    set -e
+    
+    if [ $get_result -ne 0 ]; then
+        log "WARNING" "Failed to get data for key: $subnet_key" >&2
+        return 1
+    fi
+    
+    # Validate the data format
+    if [ -z "$subnet_data" ]; then
+        log "WARNING" "Empty data for key: $subnet_key" >&2
+        return 1
+    fi
+    
+    # Check if it's valid JSON
+    if command -v jq &>/dev/null; then
+        if ! echo "$subnet_data" | jq . >/dev/null 2>&1; then
+            log "WARNING" "Invalid JSON for key: $subnet_key" >&2
+            # Print first 100 chars of data for debugging
+            log "DEBUG" "Data (first 100 chars): ${subnet_data:0:100}" >&2
+            return 1
+        fi
+        
+        # Extract PublicIP with debugging
+        local public_ip=$(echo "$subnet_data" | jq -r '.PublicIP' 2>/dev/null)
+        if [ $? -ne 0 ] || [ -z "$public_ip" ] || [ "$public_ip" = "null" ]; then
+            log "WARNING" "No PublicIP in data for key: $subnet_key" >&2
+            log "DEBUG" "JSON data: $subnet_data" >&2
+            return 1
+        fi
+        
+        log "DEBUG" "Successfully extracted PublicIP: $public_ip for key: $subnet_key" >&2
+    else
+        # Fallback to grep/sed
+        local public_ip=$(echo "$subnet_data" | grep -o '"PublicIP":"[^"]*"' | cut -d'"' -f4)
+        if [ -z "$public_ip" ]; then
+            log "WARNING" "No PublicIP in data for key: $subnet_key" >&2
+            return 1
+        fi
+        
+        log "DEBUG" "Extracted PublicIP using grep: $public_ip for key: $subnet_key" >&2
+    fi
+    
+    return 0
+}
+
+# Safe JSON parsing function
+safe_jq_parse() {
+    local json_data="$1"
+    local jq_filter="$2"
+    local default_value="${3:-}"
+    
+    if [ -z "$json_data" ]; then
+        echo "$default_value"
+        return 1
+    fi
+    
+    # Validate JSON before passing to jq
+    if ! echo "$json_data" | grep -q "^{" && ! echo "$json_data" | grep -q "^\["; then
+        log "DEBUG" "Invalid JSON format detected" >&2
+        echo "$default_value"
+        return 1
+    fi
+    
+    # Try to parse with jq
+    local result
+    result=$(echo "$json_data" | jq -r "$jq_filter" 2>/dev/null)
+    if [ $? -ne 0 ] || [ -z "$result" ] || [ "$result" = "null" ]; then
+        echo "$default_value"
+        return 1
+    fi
+    
+    echo "$result"
+    return 0
+}
+
 # ==========================================
 # Route backup and restore functions
 # ==========================================
