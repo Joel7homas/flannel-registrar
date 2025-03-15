@@ -448,6 +448,14 @@ main() {
     log "ERROR" "Failed to initialize etcd structure"
     exit 1
   }
+
+  # Register host status with VTEP MAC information
+  log "INFO" "Registering host status in etcd"
+  if type register_host_status &>/dev/null; then
+      register_host_status || log "WARNING" "Failed to register host status"
+  else
+      log "ERROR" "register_host_status function not available"
+  fi
   
   # Clean up localhost entries in etcd
   log "INFO" "Cleaning up problematic etcd entries"
@@ -530,6 +538,19 @@ main() {
   while true; do
     log "DEBUG" "Starting iteration of main loop"
     
+    # Periodically update host status
+    HOST_STATUS_UPDATE_INTERVAL=${HOST_STATUS_UPDATE_INTERVAL:-300} # 5 minutes default
+    HOST_STATUS_LAST_UPDATE=${HOST_STATUS_LAST_UPDATE:-0}
+    current_time=$(date +%s)
+
+    if [ $((current_time - HOST_STATUS_LAST_UPDATE)) -gt $HOST_STATUS_UPDATE_INTERVAL ]; then
+        log "DEBUG" "Updating host status registration"
+        if type register_host_status &>/dev/null; then
+            register_host_status
+            HOST_STATUS_LAST_UPDATE=$current_time
+        fi
+    fi
+
     # Update routes for all subnets
     ensure_flannel_routes || log "WARNING" "Failed to update flannel routes"
     

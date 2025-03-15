@@ -182,6 +182,35 @@ get_docker_networks() {
     return 0
 }
 
+# Register host status with VTEP MAC information in etcd
+# Usage: register_host_status
+register_host_status() {
+    local hostname=$(hostname)
+    local vtep_mac=$(get_flannel_mac_address)
+    local primary_ip=$(get_primary_ip)
+    local timestamp=$(date +%s)
+    
+    if [ -z "$vtep_mac" ]; then
+        log "ERROR" "Failed to get VTEP MAC address for host status registration"
+        return 1
+    fi
+    
+    log "INFO" "Registering host status for $hostname (VTEP MAC: $vtep_mac)"
+    
+    # Create JSON data
+    local status_data="{\"hostname\":\"$hostname\",\"vtep_mac\":\"$vtep_mac\",\"primary_ip\":\"$primary_ip\",\"timestamp\":$timestamp}"
+    
+    # Write to etcd
+    local status_key="${FLANNEL_CONFIG_PREFIX}/_host_status/$hostname"
+    if ! etcd_put "$status_key" "$status_data"; then
+        log "ERROR" "Failed to register host status in etcd"
+        return 1
+    fi
+    
+    log "INFO" "Successfully registered host status in etcd"
+    return 0
+}
+
 # ==========================================
 # Host gateway mapping functions
 # ==========================================
@@ -511,5 +540,6 @@ export -f get_first_ip_in_subnet
 export -f check_flannel_interface get_flannel_mac_address set_flannel_mtu
 export -f check_vxlan_module ensure_flannel_interface_up get_host_for_subnet
 export -f get_primary_ip get_all_ips is_local_ip get_docker_networks
+export -f register_host_status
 export -A HOST_GATEWAYS
 export DEFAULT_INTERFACE FLANNEL_MTU

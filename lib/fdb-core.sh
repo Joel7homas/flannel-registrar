@@ -222,12 +222,32 @@ update_fdb_entries_from_etcd() {
     fi
     
     # Get all host status entries to find MAC addresses
+    log "DEBUG" "Retrieving host status entries from etcd"
     local status_keys=$(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/_host_status/")
     local host_macs=()
     local host_names=()
+    local host_count=0
     
+    # Check if we have host status entries
+    if [ -z "$status_keys" ]; then
+        log "WARNING" "No host status entries found in etcd. Host status registration may not be configured."
+        # Try to register our own host status as fallback
+        if type register_host_status &>/dev/null; then
+            log "INFO" "Attempting to register local host status as fallback"
+            register_host_status
+            # Refresh the keys after registration
+            status_keys=$(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/_host_status/")
+        fi
+    fi
+    
+    # Process host status entries if available
     for key in $status_keys; do
+        if [ -z "$key" ]; then
+            continue
+        fi
+        
         local host=$(basename "$key")
+        log "DEBUG" "Processing host status for $host"
         local status_data=$(etcd_get "$key")
         
         if [ -n "$status_data" ]; then
@@ -239,19 +259,43 @@ update_fdb_entries_from_etcd() {
                 vtep_mac=$(echo "$status_data" | grep -o '"vtep_mac":"[^"]*"' | cut -d'"' -f4)
             fi
             
-            if [ -n "$vtep_mac" ] && [ "$vtep_mac" != "unknown" ]; then
+            if [ -n "$vtep_mac" ] && [ "$vtep_mac" != "unknown" ] && [ "$vtep_mac" != "null" ]; then
                 host_macs+=("$vtep_mac")
                 host_names+=("$host")
+                host_count=$((host_count + 1))
+                log "DEBUG" "Found VTEP MAC for $host: $vtep_mac"
+            else
+                log "WARNING" "Invalid or missing VTEP MAC for host $host"
             fi
+        else
+            log "WARNING" "Empty status data for host $host"
         fi
     done
     
+    log "INFO" "Found $host_count hosts with VTEP MAC addresses"
+    
     # Get subnet entries to find IP addresses
+    log "DEBUG" "Retrieving subnet entries from etcd"
     local subnet_keys=$(etcd_list_keys "${FLANNEL_PREFIX}/subnets/")
     local host_ips=()
     local subnet_hosts=()
+    local subnet_count=0
+    
+    if [ -z "$subnet_keys" ]; then
+        log "WARNING" "No subnet entries found in etcd. Flannel may not be properly configured."
+    fi
     
     for key in $subnet_keys; do
+        if [ -z "$key" ]; then
+            continue
+        fi
+        
+        # Filter out non-subnet entries (like date-format strings)
+        if ! echo "$key" | grep -q -E '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'; then
+            log "DEBUG" "Skipping non-subnet key: $key"
+            continue
+        fi
+        
         local subnet_data=$(etcd_get "$key")
         
         if [ -n "$subnet_data" ]; then
@@ -266,12 +310,81 @@ update_fdb_entries_from_etcd() {
                 host=$(echo "$subnet_data" | grep -o '"hostname":"[^"]*"' | cut -d'"' -f4 || echo "")
             fi
             
-            if [ -n "$public_ip" ] && [ "$public_ip" != "127.0.0.1" ]; then
+            if [ -n "$public_ip" ] && [ "$public_ip" != "127.0.0.1" ] && [ "$public_ip" != "null" ]; then
                 host_ips+=("$public_ip")
                 subnet_hosts+=("$host")
+                subnet_count=$((subnet_count + 1))
+                log "DEBUG" "Found subnet entry with PublicIP: $public_ip, hostname: $host"
+            else
+                log "WARNING" "Invalid or localhost PublicIP in subnet data: $key"
             fi
+        else 
+            log "WARNING" "Empty subnet data for key: $key"
         fi
     done
+    
+    log "INFO" "Found $subnet_count subnet entries with valid PublicIPs"
+    
+    # Fallback: If no host status entries but we have subnet entries, try to discover VTEP MACs
+    if [ $host_count -eq 0 ] && [ $subnet_count -gt 0 ]; then
+        log "WARNING" "No host status entries with VTEP MACs found. Attempting fallback discovery."
+        
+        # Get local VTEP MAC for reference
+        local local_vtep_mac=$(get_flannel_mac_address)
+        if [ -n "$local_vtep_mac" ]; then
+            log "DEBUG" "Local VTEP MAC: $local_vtep_mac"
+            
+            # Add our own host to the lists
+            local local_hostname=$(hostname)
+            host_macs+=("$local_vtep_mac")
+            host_names+=("$local_hostname")
+            host_count=$((host_count + 1))
+            
+            # Try to register our host status to help others
+            if type register_host_status &>/dev/null; then
+                log "INFO" "Registering local host status to help other hosts"
+                register_host_status
+            fi
+        else
+            log "ERROR" "Failed to get local VTEP MAC address for fallback"
+        fi
+        
+        # Generate synthetic VTEP MACs for other hosts if needed
+        # This is a last resort fallback that assumes standard VTEP MAC generation
+        for i in "${!subnet_hosts[@]}"; do
+            # Skip if it's our own host
+            if [ "${subnet_hosts[$i]}" = "$(hostname)" ]; then
+                continue
+            fi
+            
+            # Skip if this host already has a VTEP MAC
+            local found=false
+            for j in "${!host_names[@]}"; do
+                if [ "${host_names[$j]}" = "${subnet_hosts[$i]}" ]; then
+                    found=true
+                    break
+                fi
+            done
+            
+            if ! $found && [ -n "${subnet_hosts[$i]}" ]; then
+                # Create a synthetic MAC based on host info
+                # This is a fallback approach that may work for standard deployments
+                local ip="${host_ips[$i]}"
+                local ip_hex=$(echo "$ip" | awk -F. '{printf "02:42:%02x:%02x:%02x:%02x", $1, $2, $3, $4}')
+                
+                log "WARNING" "Using synthetic VTEP MAC $ip_hex for host ${subnet_hosts[$i]} ($ip)"
+                host_macs+=("$ip_hex")
+                host_names+=("${subnet_hosts[$i]}")
+                host_count=$((host_count + 1))
+            fi
+        done
+    fi
+    
+    # If we still have no MAC addresses, report an error
+    if [ $host_count -eq 0 ]; then
+        log "ERROR" "Failed to find any VTEP MAC addresses. FDB entries cannot be created."
+        return 1
+    fi
     
     # Current FDB entries
     local current_fdb=$(bridge fdb show dev flannel.1 2>/dev/null)
@@ -287,6 +400,7 @@ update_fdb_entries_from_etcd() {
         
         # Skip ourselves
         if [ "$host" = "$(hostname)" ]; then
+            log "DEBUG" "Skipping FDB entry for our own host: $host"
             continue
         fi
         
@@ -294,19 +408,38 @@ update_fdb_entries_from_etcd() {
         for j in "${!subnet_hosts[@]}"; do
             if [ "${subnet_hosts[$j]}" = "$host" ]; then
                 ip="${host_ips[$j]}"
+                log "DEBUG" "Found IP $ip for host $host"
                 break
             fi
         done
         
         # If no exact hostname match, try to find by IP pattern (for older entries without hostname)
         if [ -z "$ip" ]; then
-            for j in "${!host_ips[@]}"; do
-                # Try to match by hostname resolution
-                if [ "$(getent hosts "$host" 2>/dev/null | awk '{print $1}')" = "${host_ips[$j]}" ]; then
-                    ip="${host_ips[$j]}"
-                    break
-                fi
-            done
+            log "DEBUG" "No exact hostname match for $host, trying IP resolution"
+            
+            # Try to match by hostname resolution
+            local resolved_ip=$(getent hosts "$host" 2>/dev/null | awk '{print $1}')
+            if [ -n "$resolved_ip" ]; then
+                for j in "${!host_ips[@]}"; do
+                    if [ "$resolved_ip" = "${host_ips[$j]}" ]; then
+                        ip="${host_ips[$j]}"
+                        log "DEBUG" "Matched $host to IP $ip by hostname resolution"
+                        break
+                    fi
+                done
+            fi
+            
+            # If still no match, try to use any available IP (best effort)
+            if [ -z "$ip" ] && [ ${#host_ips[@]} -gt 0 ]; then
+                # Use first available IP as fallback for this host
+                for j in "${!subnet_hosts[@]}"; do
+                    if [ -n "${host_ips[$j]}" ] && [ "${host_ips[$j]}" != "127.0.0.1" ]; then
+                        ip="${host_ips[$j]}"
+                        log "WARNING" "Using fallback IP $ip for host $host (no exact match)"
+                        break
+                    fi
+                done
+            fi
         fi
         
         if [ -n "$mac" ] && [ -n "$ip" ]; then
@@ -335,7 +468,18 @@ update_fdb_entries_from_etcd() {
                 fi
                 
                 # Add the entry
-                bridge fdb add "$mac" dev flannel.1 dst "$endpoint_ip"
+                if bridge fdb add "$mac" dev flannel.1 dst "$endpoint_ip"; then
+                    log "DEBUG" "Successfully added FDB entry: $mac -> $endpoint_ip"
+                else 
+                    log "ERROR" "Failed to add FDB entry: $mac -> $endpoint_ip"
+                fi
+            fi
+        else 
+            if [ -z "$mac" ]; then
+                log "WARNING" "Missing MAC address for host $host"
+            fi
+            if [ -z "$ip" ]; then
+                log "WARNING" "Missing IP address for host $host"
             fi
         fi
     done
@@ -373,6 +517,7 @@ update_fdb_entries_from_etcd() {
     
     return 0
 }
+
 
 # ==========================================
 # Interface management functions
