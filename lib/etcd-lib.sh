@@ -228,7 +228,7 @@ _etcd_v3_delete() {
 
 # List keys with a prefix from etcd v3
 # Usage: keys=$(_etcd_v3_list_keys "/prefix")
-# Enhanced _etcd_v3_list_keys function with better key handling
+# Enhanced _etcd_v3_list_keys function with better error handling
 _etcd_v3_list_keys() {
     local prefix="$1"
 
@@ -246,32 +246,40 @@ _etcd_v3_list_keys() {
         -H "Content-Type: application/json" \
         -d "$payload" 2>&1)
 
-    # Check response
-    if echo "$response" | grep -q "\"kvs\""; then
-        # Extract and decode the keys with proper newline handling
-        if command -v jq &>/dev/null; then
-            # Use jq if available for more reliable parsing
-            echo "$response" | jq -r '.kvs[].key' | while read -r base64_key; do
-                if [ -n "$base64_key" ]; then
-                    decoded_key=$(_etcd_base64_decode "$base64_key")
-                    echo "$decoded_key"  # Each key on its own line
-                fi
-            done
-        else
-            # Fall back to grep/sed but ensure each key is on its own line
-            echo "$response" | grep -o '"key":"[^"]*"' | cut -d'"' -f4 | while read -r base64_key; do
-                if [ -n "$base64_key" ]; then
-                    decoded_key=$(_etcd_base64_decode "$base64_key")
-                    echo "$decoded_key"  # Each key on its own line
-                fi
-            done
-        fi
-        return 0
-    else
+    # Validate response before processing
+    if ! echo "$response" | grep -q "\"kvs\""; then
         log "DEBUG" "etcd v3 LIST KEYS failed or no keys found: $prefix"
         return 1
     fi
+
+    # Extract and decode the keys with proper error handling
+    if command -v jq &>/dev/null; then
+        # Use jq with error handling
+        local keys=$(echo "$response" | jq -r '.kvs[].key' 2>/dev/null || echo "")
+        if [ -n "$keys" ]; then
+            echo "$keys" | while read -r base64_key; do
+                if [ -n "$base64_key" ]; then
+                    decoded_key=$(_etcd_base64_decode "$base64_key" 2>/dev/null || echo "")
+                    if [ -n "$decoded_key" ]; then
+                        echo "$decoded_key"
+                    fi
+                fi
+            done
+        fi
+    else
+        # Fall back to grep/sed but with error handling
+        echo "$response" | grep -o '"key":"[^"]*"' | cut -d'"' -f4 | while read -r base64_key; do
+            if [ -n "$base64_key" ]; then
+                decoded_key=$(_etcd_base64_decode "$base64_key" 2>/dev/null || echo "")
+                if [ -n "$decoded_key" ]; then
+                    echo "$decoded_key"
+                fi
+            fi
+        done
+    fi
+    return 0
 }
+
 
 # ==========================================
 # ETCD CRUD operations - v2 API
