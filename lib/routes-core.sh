@@ -69,6 +69,40 @@ init_routes_core() {
 }
 
 # ==========================================
+# Utility functions for route management
+# ==========================================
+
+# Validate IP address format
+is_valid_route_ip() {
+    local ip="$1"
+    if [ -z "$ip" ]; then
+        return 1
+    fi
+    [[ $ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+    return 0
+}
+
+# Validate CIDR notation
+is_valid_route_cidr() {
+    local cidr="$1"
+    if [ -z "$cidr" ]; then
+        return 1
+    fi
+    [[ $cidr =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$ ]] || return 1
+    return 0
+}
+
+# Validate network interface
+is_valid_route_interface() {
+    local interface="$1"
+    if [ -z "$interface" ]; then
+        return 1
+    fi
+    ip link show dev "$interface" &>/dev/null || return 1
+    return 0
+}
+
+# ==========================================
 # Route backup and restore functions
 # ==========================================
 
@@ -236,10 +270,10 @@ parse_extra_routes() {
         # Split route by colon
         IFS=':' read -r subnet gateway interface <<< "$route"
         
-        if [ -n "$subnet" ] && [ -n "$gateway" ]; then
+        if is_valid_route_cidr "$subnet" && is_valid_route_ip "$gateway"; then
             log "INFO" "Adding extra route: $subnet via $gateway dev ${interface:-auto}"
             
-            if [ -n "$interface" ]; then
+            if [ -n "$interface" ] && is_valid_route_interface "$interface"; then
                 ip route replace "$subnet" via "$gateway" dev "$interface" proto static || {
                     log "WARNING" "Failed to add extra route: $subnet via $gateway dev $interface"
                 }
@@ -383,23 +417,27 @@ ensure_flannel_routes() {
             
             # Check if we're routing via a gateway or directly
             if [[ "$gateway" != "$public_ip" ]]; then
-                log "DEBUG" "Routing for $cidr_subnet via gateway $gateway (target host: $public_ip)"
-                
-                # Check if route via gateway exists
-                if ip route show | grep -q "$cidr_subnet.*via $gateway"; then
-                    log "DEBUG" "Route already exists for $cidr_subnet via gateway $gateway"
-                    unchanged=$((unchanged + 1))
-                else
-                    # Remove any direct routes first
-                    ip route del "$cidr_subnet" &>/dev/null || true
-                    
-                    # Add the gateway route
-                    if ip route add "$cidr_subnet" via "$gateway"; then
-                        log "INFO" "Successfully added route for $cidr_subnet via gateway $gateway"
-                        added=$((added + 1))
+                if is_valid_route_cidr "$cidr_subnet" && is_valid_route_ip "$gateway"; then
+                    log "DEBUG" "Routing for $cidr_subnet via gateway $gateway (target host: $public_ip)"
+    
+                    # Check if route via gateway exists
+                    if ip route show | grep -q "$cidr_subnet.*via $gateway"; then
+                        log "DEBUG" "Route already exists for $cidr_subnet via gateway $gateway"
+                        unchanged=$((unchanged + 1))
                     else
-                        log "ERROR" "Failed to add route for $cidr_subnet via gateway $gateway"
+                        # Remove any direct routes first
+                        ip route del "$cidr_subnet" &>/dev/null || true
+                        
+                        # Add the gateway route
+                        if ip route add "$cidr_subnet" via "$gateway"; then
+                            log "INFO" "Successfully added route for $cidr_subnet via gateway $gateway"
+                            added=$((added + 1))
+                        else
+                            log "ERROR" "Failed to add route for $cidr_subnet via gateway $gateway"
+                        fi
                     fi
+                else
+                    log "WARNING" "Skipping invalid gateway route: subnet='$cidr_subnet', gateway='$gateway'"
                 fi
             else
                 # Direct routing
@@ -419,12 +457,16 @@ ensure_flannel_routes() {
                             log "DEBUG" "Found WireGuard interface: $wg_iface"
                             
                             # Add a direct route through WireGuard interface
-                            log "INFO" "Attempting to add direct route through WireGuard interface"
-                            if ip route add $cidr_subnet dev $wg_iface; then
-                                log "INFO" "Successfully added direct route for $cidr_subnet via WireGuard interface"
-                                added=$((added + 1))
+                            if is_valid_route_cidr "$cidr_subnet" && is_valid_route_interface "$wg_iface"; then
+                                log "INFO" "Attempting to add direct route through WireGuard interface"
+                                if ip route add "$cidr_subnet" dev "$wg_iface"; then
+                                    log "INFO" "Successfully added direct route for $cidr_subnet via WireGuard interface"
+                                    added=$((added + 1))
+                                else
+                                    log "ERROR" "Failed to add direct route for $cidr_subnet via WireGuard interface"
+                                fi
                             else
-                                log "ERROR" "Failed to add direct route for $cidr_subnet via WireGuard interface"
+                                log "WARNING" "Skipping invalid WireGuard route: subnet='$cidr_subnet', interface='$wg_iface'"
                             fi
                         fi
                         continue
@@ -450,24 +492,29 @@ ensure_flannel_routes() {
                     log "INFO" "Adding direct route for $cidr_subnet via $public_ip"
                     
                     # Add the direct route
-                    if ip route add "$cidr_subnet" via "$public_ip"; then
-                        log "INFO" "Successfully added direct route for $cidr_subnet via $public_ip"
-                        added=$((added + 1))
-                    else
-                        log "ERROR" "Failed to add direct route, trying alternative methods..."
+                    if is_valid_route_cidr "$cidr_subnet" && is_valid_route_ip "$public_ip"; then
+                        # Proceed with adding the route as in the original code
+                        if ip route add "$cidr_subnet" via "$public_ip"; then
+                            log "INFO" "Successfully added direct route for $cidr_subnet via $public_ip"
+                            added=$((added + 1))
+                        else
+                            log "ERROR" "Failed to add direct route, trying alternative methods..."
                         
-                        # Try to determine interface to the public_ip
-                        local gateway_iface=$(ip route get $public_ip 2>/dev/null | grep -o 'dev [^ ]*' | cut -d' ' -f2 || echo "")
-                        if [[ -n "$gateway_iface" ]]; then
-                            log "INFO" "Trying to add route via interface $gateway_iface"
-                            if ip route add "$cidr_subnet" via "$public_ip" dev "$gateway_iface"; then
-                                log "INFO" "Successfully added route using explicit interface"
-                                added=$((added + 1))
-                            else
-                                log "ERROR" "Failed to add route even with explicit interface"
+                            # Try to determine interface to the public_ip
+                            local gateway_iface=$(ip route get $public_ip 2>/dev/null | grep -o 'dev [^ ]*' | cut -d' ' -f2 || echo "")
+                            if [[ -n "$gateway_iface" ]]; then
+                                log "INFO" "Trying to add route via interface $gateway_iface"
+                                if ip route add "$cidr_subnet" via "$public_ip" dev "$gateway_iface"; then
+                                    log "INFO" "Successfully added route using explicit interface"
+                                    added=$((added + 1))
+                                else
+                                    log "ERROR" "Failed to add route even with explicit interface"
+                                fi
                             fi
                         fi
-                    fi
+                     else
+                         log "WARNING" "Skipping invalid route: subnet='$cidr_subnet', gateway='$public_ip'"
+                     fi
                 fi
             fi
         fi
@@ -585,5 +632,6 @@ get_route_summary() {
 # Export necessary functions and variables
 export -f init_routes_core backup_routes restore_routes_from_backup
 export -f parse_extra_routes ensure_flannel_routes verify_routes get_route_summary
+export -f is_valid_route_ip is_valid_route_cidr is_valid_route_interface
 export ROUTES_LAST_UPDATE_TIME ROUTES_UPDATE_INTERVAL
 export ROUTES_STATE_DIR ROUTES_BACKUP_FILE FLANNEL_ROUTES_EXTRA
