@@ -69,6 +69,11 @@ init_fdb_management() {
 # Backup current FDB entries
 # Usage: backup_fdb_entries
 backup_fdb_entries() {
+    # Ensure backup directory exists before writing the file
+    mkdir -p "$(dirname "$FDB_BACKUP_FILE")" || {
+        log "WARNING" "Failed to create backup directory: $(dirname "$FDB_BACKUP_FILE")"
+    }
+
     # Get current FDB entries for flannel.1
     if command -v bridge &>/dev/null; then
         local fdb_entries=$(bridge fdb show dev flannel.1 2>/dev/null)
