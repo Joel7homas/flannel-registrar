@@ -64,25 +64,25 @@ init_etcd_lib() {
 # Check connectivity to etcd
 # Returns 0 if successful, 1 otherwise
 _etcd_check_connectivity() {
-    log "DEBUG" "Checking connectivity to etcd at $ETCD_ENDPOINT"
+    log "DEBUG" "Checking connectivity to etcd at $ETCD_ENDPOINT" >&2
     
     if [[ "$ETCDCTL_API" == "3" ]]; then
         # Check etcd v3 health
         local response=$(curl -s -m "$ETCD_TIMEOUT" "${ETCD_ENDPOINT}/health" 2>&1)
         if echo "$response" | grep -q "true"; then
-            log "DEBUG" "Successfully connected to etcd v3"
+            log "DEBUG" "Successfully connected to etcd v3" >&2
             return 0
         fi
     else
         # Check etcd v2 health
         local response=$(curl -s -m "$ETCD_TIMEOUT" "${ETCD_ENDPOINT}/health" 2>&1)
         if echo "$response" | grep -q "true"; then
-            log "DEBUG" "Successfully connected to etcd v2"
+            log "DEBUG" "Successfully connected to etcd v2" >&2
             return 0
         fi
     fi
     
-    log "ERROR" "Failed to connect to etcd at $ETCD_ENDPOINT"
+    log "ERROR" "Failed to connect to etcd at $ETCD_ENDPOINT" >&2
     return 1
 }
 
@@ -238,7 +238,8 @@ _etcd_v3_list_keys() {
     # Create JSON payload
     local payload="{\"key\":\"$base64_prefix\",\"range_end\":\"$base64_end\",\"keys_only\":true}"
 
-    log "DEBUG" "Sending etcd v3 LIST KEYS: $prefix"
+    # Log to stderr to avoid mixing with return values
+    log "DEBUG" "Sending etcd v3 LIST KEYS: $prefix" >&2
 
     # Send request to etcd
     local response=$(curl -s -X POST -m "$ETCD_TIMEOUT" \
@@ -248,7 +249,7 @@ _etcd_v3_list_keys() {
 
     # Validate response before processing
     if ! echo "$response" | grep -q "\"kvs\""; then
-        log "DEBUG" "etcd v3 LIST KEYS failed or no keys found: $prefix"
+        log "DEBUG" "etcd v3 LIST KEYS failed or no keys found: $prefix" >&2
         return 1
     fi
 
