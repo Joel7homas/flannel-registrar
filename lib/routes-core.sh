@@ -496,12 +496,28 @@ ensure_flannel_routes() {
     local added=0
     local updated=0
     local unchanged=0
+    local skipped=0
     
     for key in $subnet_keys; do
         # Extract subnet from key (e.g., 10.5.40.0-24 from /coreos.com/network/subnets/10.5.40.0-24)
         local subnet_id=$(basename "$key")
         local subnet_data=$(etcd_get "$key")
         
+        # Validate subnet_id format before processing
+        # Skip date-like entries and other invalid formats
+        if [[ "$subnet_id" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+            log "DEBUG" "Skipping date-like key: $subnet_id"
+            skipped=$((skipped + 1))
+            continue
+        fi
+        
+        # Additional validation for subnet_id format
+        if ! [[ "$subnet_id" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+-[0-9]+$ ]]; then
+            log "DEBUG" "Skipping invalid subnet key format: $subnet_id"
+            skipped=$((skipped + 1))
+            continue
+        fi
+
         # Only process if we got data
         if [[ -n "$subnet_data" ]]; then
             # Extract PublicIP using jq if available
@@ -515,6 +531,13 @@ ensure_flannel_routes() {
             
             # Convert the subnet notation back to CIDR (e.g., 10.5.40.0-24 to 10.5.40.0/24)
             local cidr_subnet=$(echo "$subnet_id" | sed 's/-/\//g')
+
+            if ! validate_subnet "$cidr_subnet"; then
+                log "WARNING" "Skipping invalid CIDR: $cidr_subnet"
+                skipped=$((skipped + 1))
+                continue
+            fi
+
             
             # Skip any subnet with localhost IP or our own IP
             if [[ "$public_ip" == "127.0.0.1" || "$public_ip" == "$FLANNELD_PUBLIC_IP" ]]; then
@@ -649,7 +672,7 @@ ensure_flannel_routes() {
     # Add extra routes if defined
     parse_extra_routes
     
-    log "INFO" "Route management completed: $added added, $updated updated, $unchanged unchanged"
+    log "INFO" "Route management completed: $added added, $updated updated, $unchanged unchanged, $skipped skipped"
     
     # Backup current routes
     backup_routes
