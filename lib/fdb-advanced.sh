@@ -396,6 +396,10 @@ check_vxlan_interfaces() {
     local interface_stats=$(ip -s link show "$interface")
     local rx_bytes=$(echo "$interface_stats" | grep -A2 RX | tail -1 | awk '{print $1}')
     local tx_bytes=$(echo "$interface_stats" | grep -A2 TX | tail -1 | awk '{print $1}')
+
+    # Ensure variables contain only numeric values
+    rx_bytes=$(echo "$rx_bytes" | grep -o '^[0-9]*$' || echo "0")
+    tx_bytes=$(echo "$tx_bytes" | grep -o '^[0-9]*$' || echo "0")
     
     if [ "$rx_bytes" -eq 0 ] && [ "$tx_bytes" -eq 0 ]; then
         log "WARNING" "VXLAN interface $interface has no traffic"
