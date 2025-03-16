@@ -184,6 +184,7 @@ get_docker_networks() {
 
 # Register host status with VTEP MAC information in etcd
 # Usage: register_host_status
+# Updated register_host_status function with compatibility wrapper
 register_host_status() {
     # Check if recovery-host.sh functions are available
     if type register_host_as_active &>/dev/null; then
@@ -196,9 +197,17 @@ register_host_status() {
     log "INFO" "recovery-host.sh not available, using local implementation for host status registration"
     
     local hostname=$(hostname)
-    local vtep_mac=$(get_flannel_mac_address)
+    local vtep_mac=""
     local primary_ip=$(get_primary_ip)
     local timestamp=$(date +%s)
+    
+    # Get VTEP MAC using a more compatible approach
+    if [ -e /sys/class/net/flannel.1/address ]; then
+        vtep_mac=$(cat /sys/class/net/flannel.1/address)
+    else
+        # Try using ip command as fallback
+        vtep_mac=$(ip link show flannel.1 2>/dev/null | grep -o 'link/ether [^ ]*' | cut -d' ' -f2)
+    fi
     
     if [ -z "$vtep_mac" ]; then
         log "ERROR" "Failed to get VTEP MAC address for host status registration"
