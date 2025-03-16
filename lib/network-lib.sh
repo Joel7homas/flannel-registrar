@@ -57,13 +57,13 @@ get_primary_ip() {
     
     if [ -z "$interface" ]; then
         log "WARNING" "No default interface found, trying to determine primary IP"
-        # Try to get any non-loopback IPv4 address
-        ip -4 addr show scope global | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1
+        # Try to get any non-loopback IPv4 address using compatible grep
+        ip -4 addr show scope global | grep -o 'inet [0-9.]*' | cut -d' ' -f2 | head -1
         return $?
     fi
     
-    # Get the primary IP from the default interface
-    local primary_ip=$(ip -4 addr show dev "$interface" | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1)
+    # Get the primary IP from the default interface using compatible grep
+    local primary_ip=$(ip -4 addr show dev "$interface" | grep -o 'inet [0-9.]*' | cut -d' ' -f2 | head -1)
     
     if [ -z "$primary_ip" ]; then
         log "WARNING" "No IPv4 address found on interface $interface"
@@ -77,8 +77,8 @@ get_primary_ip() {
 # Get all IPv4 addresses for this host
 # Returns: List of IPv4 addresses, one per line
 get_all_ips() {
-    # Get all non-loopback IPv4 addresses
-    ip -4 addr show scope global | grep -oP '(?<=inet\s)\d+(\.\d+){3}'
+    # Get all non-loopback IPv4 addresses using compatible grep
+    ip -4 addr show scope global | grep -o 'inet [0-9.]*' | cut -d' ' -f2
     return $?
 }
 
