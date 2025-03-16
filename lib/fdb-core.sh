@@ -6,7 +6,7 @@
 # Module information
 MODULE_NAME="fdb-core"
 MODULE_VERSION="1.0.0"
-MODULE_DEPENDENCIES=("common" "etcd-lib" "network-lib")
+MODULE_DEPENDENCIES=("common" "etcd-lib" "network-lib" "recovery-host")
 
 # ==========================================
 # Global variables for FDB management
@@ -38,6 +38,21 @@ init_fdb_management() {
         fi
     done
     
+    # Check recovery-host availability but don't fail if not present
+    local recovery_host_available=true
+    for func in get_all_active_hosts get_remote_host_status; do
+        if ! type "$func" &>/dev/null; then
+            recovery_host_available=false
+            break
+        fi
+    done
+    
+    if $recovery_host_available; then
+        log "INFO" "recovery-host module found, using enhanced host status management"
+    else
+        log "WARNING" "recovery-host module not fully available, using fallback host status detection"
+    fi
+
     # Create state directory if it doesn't exist
     mkdir -p "$FDB_STATE_DIR" || {
         log "ERROR" "Failed to create FDB state directory: $FDB_STATE_DIR"
@@ -220,64 +235,148 @@ update_fdb_entries_from_etcd() {
         log "WARNING" "bridge command not available, cannot update FDB entries"
         return 1
     fi
-    
-    # Get all host status entries to find MAC addresses
-    log "DEBUG" "Retrieving host status entries from etcd"
-    local status_keys=$(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/_host_status/")
+
+    # Arrays to store host information
     local host_macs=()
     local host_names=()
+    local host_ips=()
+    local subnet_hosts=()
     local host_count=0
+    local subnet_count=0
     
-    # Check if we have host status entries
-    if [ -z "$status_keys" ]; then
-        log "WARNING" "No host status entries found in etcd. Host status registration may not be configured."
-        # Try to register our own host status as fallback
-        if type register_host_status &>/dev/null; then
-            log "INFO" "Attempting to register local host status as fallback"
-            register_host_status
-            # Refresh the keys after registration
-            status_keys=$(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/_host_status/")
+    # Check if recovery-host module is available
+    if type get_all_active_hosts &>/dev/null && type get_remote_host_status &>/dev/null; then
+        log "DEBUG" "Using recovery-host.sh functions for host status management"
+        
+        # Get all active hosts using recovery-host functions
+        local active_hosts=$(get_all_active_hosts)
+        
+        if [ -n "$active_hosts" ]; then
+            log "DEBUG" "Found active hosts using recovery-host.sh"
+            
+            # Process each active host
+            while read -r hostname; do
+                [ -z "$hostname" ] && continue
+                
+                # Skip our own hostname
+                if [ "$hostname" = "$(hostname)" ]; then
+                    log "DEBUG" "Skipping our own host: $hostname"
+                    continue
+                fi
+                
+                # Get detailed host status
+                local host_status=$(get_remote_host_status "$hostname")
+                
+                if [ -n "$host_status" ]; then
+                    local vtep_mac=""
+                    local primary_ip=""
+                    
+                    # Extract information from host status
+                    if command -v jq &>/dev/null; then
+                        vtep_mac=$(echo "$host_status" | jq -r '.vtep_mac // ""')
+                        primary_ip=$(echo "$host_status" | jq -r '.primary_ip // ""')
+                    else
+                        vtep_mac=$(echo "$host_status" | grep -o '"vtep_mac":"[^"]*"' | cut -d'"' -f4 || echo "")
+                        primary_ip=$(echo "$host_status" | grep -o '"primary_ip":"[^"]*"' | cut -d'"' -f4 || echo "")
+                    fi
+                    
+                    if [ -n "$vtep_mac" ] && [ "$vtep_mac" != "null" ]; then
+                        host_macs+=("$vtep_mac")
+                        host_names+=("$hostname")
+                        
+                        if [ -n "$primary_ip" ] && [ "$primary_ip" != "null" ]; then
+                            host_ips+=("$primary_ip")
+                        else
+                            # Try to resolve IP from hostname
+                            local resolved_ip=$(getent hosts "$hostname" | awk '{print $1}' || echo "")
+                            host_ips+=("$resolved_ip")
+                        fi
+                        
+                        host_count=$((host_count + 1))
+                        log "DEBUG" "Added host from recovery-host.sh: $hostname, MAC: $vtep_mac, IP: ${host_ips[-1]}"
+                    fi
+                fi
+            done <<< "$active_hosts"
+            
+            log "INFO" "Found $host_count hosts with status information from recovery-host.sh"
         fi
+    else
+        # Fallback to original method using direct etcd access
+        log "DEBUG" "Falling back to direct etcd access for host status"
+        
+        # Get all host status entries to find MAC addresses
+        log "DEBUG" "Retrieving host status entries from etcd"
+        local status_keys=$(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/_host_status/")
+        
+        # Check if we have host status entries
+        if [ -z "$status_keys" ]; then
+            log "WARNING" "No host status entries found in etcd. Host status registration may not be configured."
+            # Try to register our own host status as fallback
+            if type register_host_status &>/dev/null; then
+                log "INFO" "Attempting to register local host status as fallback"
+                register_host_status
+                # Refresh the keys after registration
+                status_keys=$(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/_host_status/")
+            elif type register_host_as_active &>/dev/null; then
+                log "INFO" "Attempting to register local host status as fallback using recovery-host"
+                register_host_as_active
+                # Refresh the keys after registration
+                status_keys=$(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/_host_status/")
+            fi
+        fi
+        
+        # Process host status entries if available
+        for key in $status_keys; do
+            if [ -z "$key" ]; then
+                continue
+            fi
+            
+            local host=$(basename "$key")
+            log "DEBUG" "Processing host status for $host"
+            local status_data=$(etcd_get "$key")
+            
+            if [ -n "$status_data" ]; then
+                local vtep_mac=""
+                local primary_ip=""
+                
+                if command -v jq &>/dev/null; then
+                    vtep_mac=$(echo "$status_data" | jq -r '.vtep_mac // ""')
+                    primary_ip=$(echo "$status_data" | jq -r '.primary_ip // ""')
+                else
+                    vtep_mac=$(echo "$status_data" | grep -o '"vtep_mac":"[^"]*"' | cut -d'"' -f4 || echo "")
+                    primary_ip=$(echo "$status_data" | grep -o '"primary_ip":"[^"]*"' | cut -d'"' -f4 || echo "")
+                fi
+                
+                if [ -n "$vtep_mac" ] && [ "$vtep_mac" != "unknown" ] && [ "$vtep_mac" != "null" ]; then
+                    host_macs+=("$vtep_mac")
+                    host_names+=("$host")
+                    
+                    if [ -n "$primary_ip" ] && [ "$primary_ip" != "null" ]; then
+                        host_ips+=("$primary_ip")
+                    else 
+                        host_ips+=("")  # Empty placeholder to maintain array alignment
+                    fi
+                    
+                    host_count=$((host_count + 1))
+                    log "DEBUG" "Found VTEP MAC for $host: $vtep_mac"
+                else 
+                    log "WARNING" "Invalid or missing VTEP MAC for host $host"
+                fi
+            else 
+                log "WARNING" "Empty status data for host $host"
+            fi
+        done
+        
+        log "INFO" "Found $host_count hosts with VTEP MAC addresses"
     fi
-    
-    # Process host status entries if available
-    for key in $status_keys; do
-        if [ -z "$key" ]; then
-            continue
-        fi
-        
-        local host=$(basename "$key")
-        log "DEBUG" "Processing host status for $host"
-        local status_data=$(etcd_get "$key")
-        
-        if [ -n "$status_data" ]; then
-            local vtep_mac=""
-            
-            if command -v jq &>/dev/null; then
-                vtep_mac=$(echo "$status_data" | jq -r '.vtep_mac')
-            else
-                vtep_mac=$(echo "$status_data" | grep -o '"vtep_mac":"[^"]*"' | cut -d'"' -f4)
-            fi
-            
-            if [ -n "$vtep_mac" ] && [ "$vtep_mac" != "unknown" ] && [ "$vtep_mac" != "null" ]; then
-                host_macs+=("$vtep_mac")
-                host_names+=("$host")
-                host_count=$((host_count + 1))
-                log "DEBUG" "Found VTEP MAC for $host: $vtep_mac"
-            else
-                log "WARNING" "Invalid or missing VTEP MAC for host $host"
-            fi
-        else
-            log "WARNING" "Empty status data for host $host"
-        fi
-    done
-    
-    log "INFO" "Found $host_count hosts with VTEP MAC addresses"
     
     # Get subnet entries to find IP addresses
     log "DEBUG" "Retrieving subnet entries from etcd"
     local subnet_keys=$(etcd_list_keys "${FLANNEL_PREFIX}/subnets/")
-    local host_ips=()
+    # If we already have host_ips from recovery-host, don't reinitialize the array
+    if [ "$host_count" -eq 0 ]; then
+        local host_ips=()
+    fi
     local subnet_hosts=()
     local subnet_count=0
     
@@ -396,7 +495,7 @@ update_fdb_entries_from_etcd() {
     for i in "${!host_names[@]}"; do
         local host="${host_names[$i]}"
         local mac="${host_macs[$i]}"
-        local ip=""
+        local ip="${host_ips[$i]}"  # May already be set from recovery-host
         
         # Skip ourselves
         if [ "$host" = "$(hostname)" ]; then
@@ -404,66 +503,63 @@ update_fdb_entries_from_etcd() {
             continue
         fi
         
-        # Find IP for this host
-        for j in "${!subnet_hosts[@]}"; do
-            if [ "${subnet_hosts[$j]}" = "$host" ]; then
-                ip="${host_ips[$j]}"
-                log "DEBUG" "Found IP $ip for host $host"
-                break
-            fi
-        done
-        
-        # If no exact hostname match, try to find by IP pattern (for older entries without hostname)
+        # If IP is not already set from recovery-host module
         if [ -z "$ip" ]; then
-            log "DEBUG" "No exact hostname match for $host, trying IP resolution"
+            # Find IP for this host from subnet data
+            for j in "${!subnet_hosts[@]}"; do
+                if [ "${subnet_hosts[$j]}" = "$host" ]; then
+                    ip="${host_ips[$j]}"
+                    log "DEBUG" "Found IP $ip for host $host from subnet data"
+                    break
+                fi
+            done
             
-            # Try to match by hostname resolution
-            local resolved_ip=$(getent hosts "$host" 2>/dev/null | awk '{print $1}')
-            if [ -n "$resolved_ip" ]; then
-                for j in "${!host_ips[@]}"; do
-                    if [ "$resolved_ip" = "${host_ips[$j]}" ]; then
-                        ip="${host_ips[$j]}"
-                        log "DEBUG" "Matched $host to IP $ip by hostname resolution"
-                        break
-                    fi
-                done
-            fi
-            
-            # If still no match, try to use any available IP (best effort)
-            if [ -z "$ip" ] && [ ${#host_ips[@]} -gt 0 ]; then
-                # Use first available IP as fallback for this host
-                for j in "${!subnet_hosts[@]}"; do
-                    if [ -n "${host_ips[$j]}" ] && [ "${host_ips[$j]}" != "127.0.0.1" ]; then
-                        ip="${host_ips[$j]}"
-                        log "WARNING" "Using fallback IP $ip for host $host (no exact match)"
-                        break
-                    fi
-                done
+            # If still no IP, try hostname resolution
+            if [ -z "$ip" ]; then
+                log "DEBUG" "No exact hostname match for $host, trying hostname resolution"
+                ip=$(getent hosts "$host" 2>/dev/null | awk '{print $1}' || echo "")
+                
+                if [ -n "$ip" ]; then
+                    log "DEBUG" "Resolved hostname $host to IP $ip"
+                else 
+                    # Last resort: try to find any usable IP
+                    for j in "${!subnet_hosts[@]}"; do
+                        if [ -n "${host_ips[$j]}" ] && [ "${host_ips[$j]}" != "127.0.0.1" ]; then
+                            ip="${host_ips[$j]}"
+                            log "WARNING" "Using fallback IP $ip for host $host (no exact match)"
+                            break
+                        fi
+                    done
+                fi
             fi
         fi
         
+        # Add more detailed debug output for FDB entry creation
         if [ -n "$mac" ] && [ -n "$ip" ]; then
             # Determine appropriate endpoint IP (direct or via gateway)
             local endpoint_ip="$ip"
+            local routing_type="direct"
+            
             if type get_host_gateway &>/dev/null; then
                 local gateway=$(get_host_gateway "$ip")
                 if [ -n "$gateway" ]; then
                     endpoint_ip="$gateway"
+                    routing_type="gateway"
                     log "DEBUG" "Using gateway $endpoint_ip for FDB entry (host: $ip)"
                 fi
             fi
             
             # Check if entry already exists with correct destination
             if echo "$current_fdb" | grep -q "$mac.*dst $endpoint_ip"; then
-                log "DEBUG" "FDB entry for $host already exists and is correct: MAC=$mac, IP=$endpoint_ip"
-            else
+                log "DEBUG" "FDB entry for $host already exists and is correct: MAC=$mac, IP=$endpoint_ip ($routing_type routing)"
+            else 
                 # Remove any existing entry for this MAC
                 if echo "$current_fdb" | grep -q "$mac"; then
-                    log "INFO" "Updating FDB entry for $host: MAC=$mac, IP=$endpoint_ip"
+                    log "INFO" "Updating FDB entry for $host: MAC=$mac, IP=$endpoint_ip ($routing_type routing)"
                     bridge fdb del "$mac" dev flannel.1
                     updated=$((updated + 1))
-                else
-                    log "INFO" "Adding new FDB entry for $host: MAC=$mac, IP=$endpoint_ip"
+                else 
+                    log "INFO" "Adding new FDB entry for $host: MAC=$mac, IP=$endpoint_ip ($routing_type routing)"
                     added=$((added + 1))
                 fi
                 
@@ -475,12 +571,18 @@ update_fdb_entries_from_etcd() {
                 fi
             fi
         else 
+            # More detailed error message
+            local error_details=""
             if [ -z "$mac" ]; then
-                log "WARNING" "Missing MAC address for host $host"
+                error_details+="missing MAC address"
             fi
             if [ -z "$ip" ]; then
-                log "WARNING" "Missing IP address for host $host"
+                if [ -n "$error_details" ]; then
+                    error_details+=" and "
+                fi
+                error_details+="missing IP address"
             fi
+            log "WARNING" "Cannot create FDB entry for host $host: $error_details"
         fi
     done
     
