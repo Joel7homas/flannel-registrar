@@ -541,6 +541,62 @@ initialize_etcd() {
     return 0
 }
 
+# Function to migrate subnet entries to correct format
+migrate_subnet_entries() {
+    log "INFO" "Migrating subnet entries to standardized format"
+    
+    # Get all subnet keys
+    local subnet_keys=$(etcd_list_keys "${FLANNEL_PREFIX}/subnets/")
+    
+    if [ -z "$subnet_keys" ]; then
+        log "WARNING" "No subnet entries found to migrate"
+        return 0
+    fi
+    
+    local migrated=0
+    
+    for key in $subnet_keys; do
+        # Skip non-subnet keys
+        if ! echo "$key" | grep -q -E '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'; then
+            continue
+        fi
+        
+        # Get current data
+        local subnet_data=$(etcd_get "$key")
+        
+        # Check if it uses old format (has "backend" field)
+        if echo "$subnet_data" | grep -q '"backend"'; then
+            log "INFO" "Migrating subnet entry: $key"
+            
+            # Extract fields
+            local public_ip=""
+            local vtep_mac=""
+            
+            if command -v jq &>/dev/null; then
+                public_ip=$(echo "$subnet_data" | jq -r '.PublicIP')
+                vtep_mac=$(echo "$subnet_data" | jq -r '.backend.vtepMAC')
+            else
+                public_ip=$(echo "$subnet_data" | grep -o '"PublicIP":"[^"]*"' | cut -d'"' -f4)
+                vtep_mac=$(echo "$subnet_data" | grep -o '"vtepMAC":"[^"]*"' | cut -d'"' -f4)
+            fi
+            
+            # Create new format data
+            local new_data="{\"PublicIP\":\"$public_ip\",\"PublicIPv6\":null,\"BackendType\":\"vxlan\",\"BackendData\":{\"VNI\":1,\"VtepMAC\":\"$vtep_mac\"}}"
+            
+            # Update etcd
+            if etcd_put "$key" "$new_data"; then
+                migrated=$((migrated + 1))
+                log "INFO" "Successfully migrated: $key"
+            else
+                log "ERROR" "Failed to migrate: $key"
+            fi
+        fi
+    done
+    
+    log "INFO" "Migration completed. Migrated $migrated entries."
+    return 0
+}
+
 # Clean up localhost IP entries in etcd
 # These entries can cause routing problems
 # Usage: cleanup_localhost_entries
