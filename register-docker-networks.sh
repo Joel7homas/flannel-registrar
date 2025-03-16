@@ -497,7 +497,11 @@ main() {
         # Create backend data for the subnet
         public_ip="${FLANNELD_PUBLIC_IP:-$(hostname -I | awk '{print $1}')}"
         vtep_mac=$(cat /sys/class/net/flannel.1/address 2>/dev/null || echo "unknown")
-        backend_data="{\"PublicIP\":\"$public_ip\",\"backend\":{\"type\":\"vxlan\",\"vtepMAC\":\"$vtep_mac\"},\"hostname\":\"$HOST_NAME\"}"
+
+        ### Format change required to correct connectivity ###
+        #backend_data="{\"PublicIP\":\"$public_ip\",\"backend\":{\"type\":\"vxlan\",\"vtepMAC\":\"$vtep_mac\"},\"hostname\":\"$HOST_NAME\"}"
+        backend_data="{\"PublicIP\":\"$public_ip\",\"PublicIPv6\":null,\"BackendType\":\"vxlan\",\"BackendData\":{\"VNI\":1,\"VtepMAC\":\"$vtep_mac\"}}"
+
         
         log "DEBUG" "Backend data: $backend_data"
         
