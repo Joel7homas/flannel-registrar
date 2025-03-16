@@ -458,6 +458,14 @@ main() {
     exit 1
   }
 
+  # Add migration call
+  log "INFO" "Checking for subnet format migration"
+  if type migrate_subnet_entries &>/dev/null; then
+    migrate_subnet_entries || log "WARNING" "Subnet migration encountered issues"
+  else
+    log "WARNING" "migrate_subnet_entries function not available"
+  fi
+
   # Register host status with VTEP MAC information in etcd
   log "INFO" "Registering host status in etcd"
   if type register_host_as_active &>/dev/null; then
