@@ -30,6 +30,9 @@ FLANNEL_CONTAINER_NAME="${FLANNEL_CONTAINER_NAME:-flannel}"
 MONITORING_INTERVAL="${MONITORING_INTERVAL:-300}"  # Default 5 minutes between health checks
 MONITORING_STATUS_ENDPOINT="${MONITORING_STATUS_ENDPOINT:-}"  # Optional HTTP endpoint to POST health updates
 
+# Initialize timing variables
+HOST_STATUS_LAST_UPDATE=0
+
 # Global state paths
 STATE_DIR="/var/run/flannel-registrar"
 MODULE_DIR="/usr/local/lib/flannel-registrar"
@@ -374,6 +377,12 @@ main() {
       parse_host_gateway_map
   fi
   
+  if [ -f "${MODULE_DIR}/recovery-host.sh" ]; then
+      load_module "recovery-host" || exit 1
+  else
+      log "WARNING" "recovery-host.sh not found, using stub functions"
+  fi
+
   log "INFO" "Loading remaining modules"
   
   # Load modules in dependency order
@@ -449,12 +458,14 @@ main() {
     exit 1
   }
 
-  # Register host status with VTEP MAC information
+  # Register host status with VTEP MAC information in etcd
   log "INFO" "Registering host status in etcd"
-  if type register_host_status &>/dev/null; then
+  if type register_host_as_active &>/dev/null; then
+      register_host_as_active || log "WARNING" "Failed to register host status, will retry later"
+  elif type register_host_status &>/dev/null; then
       register_host_status || log "WARNING" "Failed to register host status"
   else
-      log "ERROR" "register_host_status function not available"
+      log "ERROR" "Host status registration functions not available"
   fi
   
   # Clean up localhost entries in etcd
@@ -563,6 +574,20 @@ main() {
       run_recovery_sequence
     }
     
+    # Periodically update host status
+    HOST_STATUS_UPDATE_INTERVAL=${HOST_STATUS_UPDATE_INTERVAL:-300} # 5 minutes default
+    HOST_STATUS_LAST_UPDATE=${HOST_STATUS_LAST_UPDATE:-0}
+    current_time=$(date +%s)
+    
+    if [ $((current_time - HOST_STATUS_LAST_UPDATE)) -gt $HOST_STATUS_UPDATE_INTERVAL ]; then
+        log "DEBUG" "Updating host status registration"
+        if type refresh_host_status &>/dev/null; then
+            refresh_host_status && HOST_STATUS_LAST_UPDATE=$current_time
+        elif type register_host_status &>/dev/null; then
+            register_host_status && HOST_STATUS_LAST_UPDATE=$current_time
+        fi
+    fi
+
     log "DEBUG" "Sleeping for ${INTERVAL} seconds"
     sleep $INTERVAL
   done
