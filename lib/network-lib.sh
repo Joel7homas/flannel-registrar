@@ -185,6 +185,16 @@ get_docker_networks() {
 # Register host status with VTEP MAC information in etcd
 # Usage: register_host_status
 register_host_status() {
+    # Check if recovery-host.sh functions are available
+    if type register_host_as_active &>/dev/null; then
+        log "WARNING" "register_host_status() is deprecated - using register_host_as_active() from recovery-host.sh"
+        register_host_as_active
+        return $?
+    fi
+    
+    # Fallback to original implementation
+    log "INFO" "recovery-host.sh not available, using local implementation for host status registration"
+    
     local hostname=$(hostname)
     local vtep_mac=$(get_flannel_mac_address)
     local primary_ip=$(get_primary_ip)
@@ -209,6 +219,25 @@ register_host_status() {
     
     log "INFO" "Successfully registered host status in etcd"
     return 0
+}
+
+# ==========================================
+# Host status management functions (Compatibility)
+# ==========================================
+
+# New compatibility function for host status refreshing
+refresh_host_status_compat() {
+    # Check if recovery-host.sh functions are available
+    if type refresh_host_status &>/dev/null; then
+        log "DEBUG" "Using refresh_host_status() from recovery-host.sh"
+        refresh_host_status
+        return $?
+    fi
+    
+    # Fallback to calling register_host_status
+    log "DEBUG" "recovery-host.sh not available, using register_host_status() for refresh"
+    register_host_status
+    return $?
 }
 
 # ==========================================
@@ -541,5 +570,6 @@ export -f check_flannel_interface get_flannel_mac_address set_flannel_mtu
 export -f check_vxlan_module ensure_flannel_interface_up get_host_for_subnet
 export -f get_primary_ip get_all_ips is_local_ip get_docker_networks
 export -f register_host_status
+export -f refresh_host_status_compat
 export -A HOST_GATEWAYS
 export DEFAULT_INTERFACE FLANNEL_MTU
