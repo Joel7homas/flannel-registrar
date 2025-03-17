@@ -27,6 +27,12 @@ ROUTES_BACKUP_FILE="${ROUTES_STATE_DIR}/routes_backup.json"
 # Extra routes from environment variable
 FLANNEL_ROUTES_EXTRA="${FLANNEL_ROUTES_EXTRA:-}"  # Format: "subnet:gateway:interface,subnet:gateway:interface"
 
+# Whether to manage flannel routes (10.5.x.x or configured FLANNEL_NETWORK)
+MANAGE_FLANNEL_ROUTES="${MANAGE_FLANNEL_ROUTES:-false}"
+
+# Flannel network prefix to identify flannel routes (default: 10.5)
+FLANNEL_NETWORK_PREFIX="${FLANNEL_NETWORK_PREFIX:-10.5}"
+
 # ==========================================
 # Initialization function
 # ==========================================
@@ -61,6 +67,14 @@ init_routes_core() {
     
     # Parse extra routes from environment variable
     parse_extra_routes
+
+    # Log initialization and configuration status
+    if [ "$MANAGE_FLANNEL_ROUTES" = "true" ]; then
+        log "INFO" "Initialized routes-core module (v${MODULE_VERSION}) - Managing flannel routes ENABLED"
+    else
+        log "INFO" "Initialized routes-core module (v${MODULE_VERSION}) - Managing flannel routes DISABLED"
+        log "INFO" "Flannel routes (${FLANNEL_NETWORK_PREFIX}.*) will be monitored but NOT modified"
+    fi
     
     # Log initialization
     log "INFO" "Initialized routes-core module (v${MODULE_VERSION})"
@@ -108,6 +122,12 @@ validate_subnet() {
     
     # Skip anything that looks like a date (YYYY/MM/DD format)
     if [[ "$subnet" =~ ^[0-9]{4}/[0-9]{2}/[0-9]{2}$ ]]; then
+        log "DEBUG" "Skipping date-like subnet: $subnet" 
+        return 1
+    fi
+
+    # Skip anything that looks like a date (YYYY-MM-DD format)
+    if [[ "$subnet" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
         log "DEBUG" "Skipping date-like subnet: $subnet" 
         return 1
     fi
@@ -292,6 +312,12 @@ restore_routes_from_backup() {
     
     # Read the JSON backup
     if command -v jq &>/dev/null; then
+
+        # Skip flannel routes if not managing them
+        if is_flannel_route "$subnet" && [ "$MANAGE_FLANNEL_ROUTES" != "true" ]; then
+            log "DEBUG" "Skipping flannel route during restore: $subnet"
+            continue
+        fi
         # Parse JSON with jq
         local count=$(jq length "$ROUTES_BACKUP_FILE")
         
@@ -321,6 +347,13 @@ restore_routes_from_backup() {
         done
     else
         # Fallback to grep/sed parsing if jq is not available
+
+        # Skip flannel routes if not managing them
+        if is_flannel_route "$subnet" && [ "$MANAGE_FLANNEL_ROUTES" != "true" ]; then
+            log "DEBUG" "Skipping flannel route during restore: $subnet"
+            continue
+        fi
+
         # Extract route components
         local subnets=$(grep -o '"subnet":"[^"]*"' "$ROUTES_BACKUP_FILE" | cut -d'"' -f4)
         local vias=$(grep -o '"via":"[^"]*"' "$ROUTES_BACKUP_FILE" | cut -d'"' -f4)
@@ -413,6 +446,40 @@ parse_extra_routes() {
     
     return 0
 }
+# =========================================
+# Helper functions
+# =========================================
+
+# Check if a route is managed by flannel
+is_flannel_route() {
+    local subnet="$1"
+    if [ -z "$subnet" ]; then
+        return 1
+    fi
+    
+    # Check if the subnet starts with the FLANNEL_NETWORK_PREFIX
+    if [[ "$subnet" =~ ^${FLANNEL_NETWORK_PREFIX}\. ]]; then
+        return 0
+    fi
+    
+    return 1
+}
+
+# Check if a route exists with flannel onlink attribute
+has_flannel_onlink_route() {
+    local subnet="$1"
+    if [ -z "$subnet" ]; then
+        return 1
+    fi
+    
+    # Check if there's a route for this subnet with the onlink attribute 
+    # (characteristic of flannel routes)
+    if ip route show | grep -q "$subnet.*dev flannel.1.*onlink"; then
+        return 0
+    fi
+    
+    return 1
+}
 
 # ==========================================
 # Core route management functions
@@ -431,6 +498,13 @@ ensure_flannel_routes() {
     
     log "INFO" "Ensuring routes exist for all registered flannel networks"
     ROUTES_LAST_UPDATE_TIME=$current_time
+    
+    # Log flannel route management mode
+    if [ "$MANAGE_FLANNEL_ROUTES" = "true" ]; then
+        log "INFO" "Flannel route management is ENABLED - will modify flannel routes if needed"
+    else
+        log "INFO" "Flannel route management is DISABLED - will monitor but not modify flannel routes"
+    fi
     
     # Initialize auto-detected gateway map
     declare -A DETECTED_GATEWAYS
@@ -498,6 +572,7 @@ ensure_flannel_routes() {
     local unchanged=0
     local skipped=0
     local success=0
+    local flannel_skipped=0
     
     for key in $subnet_keys; do
         # Extract subnet from key (e.g., 10.5.40.0-24 from /coreos.com/network/subnets/10.5.40.0-24)
@@ -539,10 +614,34 @@ ensure_flannel_routes() {
                 continue
             fi
 
-            
             # Skip any subnet with localhost IP or our own IP
             if [[ "$public_ip" == "127.0.0.1" || "$public_ip" == "$FLANNELD_PUBLIC_IP" ]]; then
                 continue
+            fi
+            
+            # Check if this is a flannel route
+            local is_flannel=false
+            if is_flannel_route "$cidr_subnet"; then
+                is_flannel=true
+                
+                # If we're not managing flannel routes, monitor but don't modify
+                if [ "$MANAGE_FLANNEL_ROUTES" != "true" ]; then
+                    # Check if flannel route exists and has the onlink attribute
+                    if has_flannel_onlink_route "$cidr_subnet"; then
+                        log "DEBUG" "Flannel route exists for $cidr_subnet with onlink attribute (managed by flannel)"
+                        flannel_skipped=$((flannel_skipped + 1))
+                        continue
+                    else
+                        # Route doesn't exist or doesn't have onlink attribute
+                        # Log warning but don't modify
+                        log "WARNING" "Flannel route for $cidr_subnet appears to be missing or misconfigured. Not modifying due to MANAGE_FLANNEL_ROUTES=false."
+                        flannel_skipped=$((flannel_skipped + 1))
+                        continue
+                    fi
+                fi
+                
+                # If we get here, we're managing flannel routes
+                log "DEBUG" "Processing flannel route: $cidr_subnet (MANAGE_FLANNEL_ROUTES=true)"
             fi
             
             # Determine the appropriate gateway for this host
@@ -612,6 +711,13 @@ ensure_flannel_routes() {
                         log "ERROR" "Failed to add direct bridge route for $cidr_subnet via $bridge_interface"
                     fi
                 else
+                    # Special handling for flannel routes with onlink
+                    if is_flannel_route "$cidr_subnet" && has_flannel_onlink_route "$cidr_subnet"; then
+                        log "DEBUG" "Preserving existing flannel onlink route for $cidr_subnet"
+                        unchanged=$((unchanged + 1))
+                        continue
+                    fi
+                    
                     # For non-local container subnets, use standard routing logic
                     log "DEBUG" "Subnet $cidr_subnet is remote, using standard routing"
                     
@@ -621,7 +727,15 @@ ensure_flannel_routes() {
                             # Check if route via gateway exists
                             if ip route show | grep -q "$cidr_subnet.*via $gateway"; then
                                 log "DEBUG" "Route already exists for $cidr_subnet via gateway $gateway"
+                                unchanged=$((unchanged + 1))
                             else
+                                # Skip if this is a flannel route with onlink that we're not supposed to manage
+                                if is_flannel_route "$cidr_subnet" && has_flannel_onlink_route "$cidr_subnet" && [ "$MANAGE_FLANNEL_ROUTES" != "true" ]; then
+                                    log "DEBUG" "Not modifying flannel onlink route for $cidr_subnet"
+                                    flannel_skipped=$((flannel_skipped + 1))
+                                    continue
+                                fi
+                                
                                 # Add gateway route and prevent onlink option
                                 if ip route add "$cidr_subnet" via "$gateway"; then
                                     log "INFO" "Successfully added route for $cidr_subnet via gateway $gateway"
@@ -637,16 +751,37 @@ ensure_flannel_routes() {
                         # Direct routing
                         log "DEBUG" "Direct routing for $cidr_subnet via $public_ip"
 
+                        # Skip if this is a flannel route with onlink that we're not supposed to manage
+                        if is_flannel_route "$cidr_subnet" && has_flannel_onlink_route "$cidr_subnet" && [ "$MANAGE_FLANNEL_ROUTES" != "true" ]; then
+                            log "DEBUG" "Not modifying flannel onlink route for $cidr_subnet"
+                            flannel_skipped=$((flannel_skipped + 1))
+                            continue
+                        fi
+
                         # Check if direct route exists and it's not using flannel.1 with onlink
                         if ip route show | grep -q "$cidr_subnet.*via $public_ip" && ! ip route show | grep -q "$cidr_subnet.*via $public_ip.*onlink"; then
                             log "DEBUG" "Proper route already exists for $cidr_subnet via $public_ip"
                             unchanged=$((unchanged + 1))
                         else
+                            # Skip if this is a flannel route with onlink that we're not supposed to manage
+                            if is_flannel_route "$cidr_subnet" && has_flannel_onlink_route "$cidr_subnet" && [ "$MANAGE_FLANNEL_ROUTES" != "true" ]; then
+                                log "DEBUG" "Not modifying flannel onlink route for $cidr_subnet"
+                                flannel_skipped=$((flannel_skipped + 1))
+                                continue
+                            fi
+                            
                             # Remove any existing problematic route
                             if ip route show | grep -q "$cidr_subnet.*onlink"; then
-                                log "INFO" "Removing problematic onlink route for $cidr_subnet"
-                                ip route del "$cidr_subnet" &>/dev/null || true
+                                if is_flannel_route "$cidr_subnet" && [ "$MANAGE_FLANNEL_ROUTES" != "true" ]; then
+                                    log "WARNING" "Found onlink route for flannel subnet $cidr_subnet. Not modifying due to MANAGE_FLANNEL_ROUTES=false."
+                                    flannel_skipped=$((flannel_skipped + 1))
+                                    continue
+                                else 
+                                    log "INFO" "Removing problematic onlink route for $cidr_subnet"
+                                    ip route del "$cidr_subnet" &>/dev/null || true
+                                fi
                             fi
+                            
                             log "INFO" "Adding direct route for $cidr_subnet via $public_ip"
 
                             # Add the direct route - specifically prevent onlink option
@@ -675,7 +810,7 @@ ensure_flannel_routes() {
                         fi
                     fi
                 fi
-            else
+            else 
                 # Non-container subnets use standard routing
                 # Check if we're routing via a gateway or directly
                 if [[ "$gateway" != "$public_ip" ]]; then
@@ -781,7 +916,7 @@ ensure_flannel_routes() {
     # Add extra routes if defined
     parse_extra_routes
     
-    log "INFO" "Route management completed: $added added, $updated updated, $unchanged unchanged, $skipped skipped, $success direct bridge routes"
+    log "INFO" "Route management completed: $added added, $updated updated, $unchanged unchanged, $skipped skipped, $success direct bridge routes, $flannel_skipped flannel routes skipped"
     
     # Backup current routes
     backup_routes
@@ -887,6 +1022,13 @@ verify_routes() {
     local missing_routes=()
     
     for subnet in "${expected_routes[@]}"; do
+
+        # Skip flannel routes if not managing them
+        if is_flannel_route "$subnet" && [ "$MANAGE_FLANNEL_ROUTES" != "true" ]; then
+            log "DEBUG" "Skipping flannel route verification: $subnet"
+            continue
+        fi
+
         if ! ip route show | grep -q "$subnet"; then
             missing_routes+=("$subnet")
         fi
@@ -950,5 +1092,7 @@ get_route_summary() {
 export -f init_routes_core backup_routes restore_routes_from_backup
 export -f parse_extra_routes ensure_flannel_routes verify_routes get_route_summary
 export -f is_valid_route_ip is_valid_route_cidr is_valid_route_interface
+export -f is_flannel_route has_flannel_onlink_route
+export MANAGE_FLANNEL_ROUTES FLANNEL_NETWORK_PREFIX
 export ROUTES_LAST_UPDATE_TIME ROUTES_UPDATE_INTERVAL
 export ROUTES_STATE_DIR ROUTES_BACKUP_FILE FLANNEL_ROUTES_EXTRA
