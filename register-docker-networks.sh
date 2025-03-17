@@ -514,8 +514,20 @@ main() {
         log "DEBUG" "Backend data: $backend_data"
         
         # Register in both prefixes
-        etcd_put "${FLANNEL_PREFIX}/subnets/${subnet_key}" "$backend_data" || log "ERROR" "Failed to register in ${FLANNEL_PREFIX}"
-        etcd_put "${FLANNEL_CONFIG_PREFIX}/${network_name}" "$subnet" || log "ERROR" "Failed to register in ${FLANNEL_CONFIG_PREFIX}"
+
+        # Only register flannel networks (10.5.x.x) in flannel's namespace
+        if [[ "$subnet" =~ ^10\.5\. ]]; then
+            log "INFO" "Registering flannel subnet $subnet in flannel namespace"
+            etcd_put "${FLANNEL_PREFIX}/subnets/${subnet_key}" "$backend_data" || \
+                log "ERROR" "Failed to register flannel subnet in ${FLANNEL_PREFIX}"
+        else
+            log "INFO" "Skipping registration of Docker network $subnet in flannel namespace"
+        fi
+
+        # Always register in our own namespace
+        etcd_put "${FLANNEL_CONFIG_PREFIX}/${network_name}" "$subnet" || \
+            log "ERROR" "Failed to register in ${FLANNEL_CONFIG_PREFIX}"
+
       fi
     done
     
