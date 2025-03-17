@@ -168,7 +168,6 @@ get_host_status_data() {
     local hostname="${HOST_NAME:-$(hostname)}"
     local vtep_mac=$(get_flannel_mac_address)
     local primary_ip=$(get_primary_ip)
-    local timestamp=$(date +%s)
     
     if [ -z "$vtep_mac" ]; then
         log "ERROR" "Failed to get VTEP MAC address for host status"
@@ -180,8 +179,8 @@ get_host_status_data() {
         return 1
     fi
     
-    # Create JSON data
-    echo "{\"hostname\":\"$hostname\",\"vtep_mac\":\"$vtep_mac\",\"primary_ip\":\"$primary_ip\",\"timestamp\":$timestamp}"
+    # Create JSON data using flannel's expected format
+    echo "{\"PublicIP\":\"$primary_ip\",\"PublicIPv6\":null,\"BackendType\":\"vxlan\",\"BackendData\":{\"VNI\":1,\"VtepMAC\":\"$vtep_mac\"}}"
     return 0
 }
 
