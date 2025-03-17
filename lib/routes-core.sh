@@ -33,6 +33,12 @@ MANAGE_FLANNEL_ROUTES="${MANAGE_FLANNEL_ROUTES:-false}"
 # Flannel network prefix to identify flannel routes (default: 10.5)
 FLANNEL_NETWORK_PREFIX="${FLANNEL_NETWORK_PREFIX:-10.5}"
 
+# Whether to detect Docker networks managed by flannel (172.x.x.x)
+DETECT_FLANNEL_DOCKER_NETWORKS="${DETECT_FLANNEL_DOCKER_NETWORKS:-true}"
+
+# Additional network prefixes to consider as flannel-managed (comma-separated)
+FLANNEL_ADDITIONAL_PREFIXES="${FLANNEL_ADDITIONAL_PREFIXES:-172.}"
+
 # ==========================================
 # Initialization function
 # ==========================================
@@ -68,14 +74,19 @@ init_routes_core() {
     # Parse extra routes from environment variable
     parse_extra_routes
 
-    # Log initialization and configuration status
     if [ "$MANAGE_FLANNEL_ROUTES" = "true" ]; then
         log "INFO" "Initialized routes-core module (v${MODULE_VERSION}) - Managing flannel routes ENABLED"
     else
         log "INFO" "Initialized routes-core module (v${MODULE_VERSION}) - Managing flannel routes DISABLED"
-        log "INFO" "Flannel routes (${FLANNEL_NETWORK_PREFIX}.*) will be monitored but NOT modified"
+        log "INFO" "Flannel routes (${FLANNEL_NETWORK_PREFIX}.* and onlink routes) will be monitored but NOT modified"
+        if [ "$DETECT_FLANNEL_DOCKER_NETWORKS" = "true" ]; then
+            log "INFO" "Docker networks with onlink attribute will also be considered flannel-managed"
+        fi
     fi
     
+    # Log inventory of detected flannel routes
+    log_flannel_route_inventory
+
     # Log initialization
     log "INFO" "Initialized routes-core module (v${MODULE_VERSION})"
     
@@ -246,6 +257,38 @@ safe_jq_parse() {
     
     echo "$result"
     return 0
+}
+
+# Log inventory of detected flannel routes
+log_flannel_route_inventory() {
+    log "INFO" "Generating flannel route inventory"
+    
+    # Check for onlink routes
+    local onlink_routes=$(ip route show | grep "onlink" | grep "flannel.1")
+    local onlink_count=$(echo "$onlink_routes" | grep -v "^$" | wc -l)
+    
+    # Check for prefix routes
+    local prefix_routes=$(ip route show | grep "^${FLANNEL_NETWORK_PREFIX}\.")
+    local prefix_count=$(echo "$prefix_routes" | grep -v "^$" | wc -l)
+    
+    log "INFO" "Detected $onlink_count flannel routes with onlink attribute"
+    log "INFO" "Detected $prefix_count routes with flannel prefix ${FLANNEL_NETWORK_PREFIX}"
+    
+    if [ "$DEBUG" = "true" ]; then
+        if [ -n "$onlink_routes" ]; then
+            log "DEBUG" "Flannel onlink routes:"
+            echo "$onlink_routes" | while read -r route; do
+                log "DEBUG" "  $route"
+            done
+        fi
+        
+        if [ -n "$prefix_routes" ]; then
+            log "DEBUG" "Flannel prefix routes:"
+            echo "$prefix_routes" | while read -r route; do
+                log "DEBUG" "  $route"
+            done
+        fi
+    fi
 }
 
 # ==========================================
@@ -457,7 +500,12 @@ is_flannel_route() {
         return 1
     fi
     
-    # Check if the subnet starts with the FLANNEL_NETWORK_PREFIX
+    # Primary detection: Check if the route has the onlink attribute on flannel.1
+    if has_flannel_onlink_route "$subnet"; then
+        return 0
+    fi
+    
+    # Secondary detection: Check prefix pattern (traditional flannel subnets)
     if [[ "$subnet" =~ ^${FLANNEL_NETWORK_PREFIX}\. ]]; then
         return 0
     fi
@@ -466,14 +514,14 @@ is_flannel_route() {
 }
 
 # Check if a route exists with flannel onlink attribute
+# Check if a route exists with flannel onlink attribute
 has_flannel_onlink_route() {
     local subnet="$1"
     if [ -z "$subnet" ]; then
         return 1
     fi
     
-    # Check if there's a route for this subnet with the onlink attribute 
-    # (characteristic of flannel routes)
+    # Check if there's a route for this subnet with the onlink attribute on flannel.1
     if ip route show | grep -q "$subnet.*dev flannel.1.*onlink"; then
         return 0
     fi
@@ -624,22 +672,19 @@ ensure_flannel_routes() {
             if is_flannel_route "$cidr_subnet"; then
                 is_flannel=true
                 
+                # Provide more detailed logging about which detection method was used
+                if has_flannel_onlink_route "$cidr_subnet"; then
+                    log "DEBUG" "Skipping flannel onlink route: $cidr_subnet via flannel.1"
+                else
+                    log "DEBUG" "Skipping flannel prefix route: $cidr_subnet"
+                fi
+    
                 # If we're not managing flannel routes, monitor but don't modify
                 if [ "$MANAGE_FLANNEL_ROUTES" != "true" ]; then
-                    # Check if flannel route exists and has the onlink attribute
-                    if has_flannel_onlink_route "$cidr_subnet"; then
-                        log "DEBUG" "Flannel route exists for $cidr_subnet with onlink attribute (managed by flannel)"
-                        flannel_skipped=$((flannel_skipped + 1))
-                        continue
-                    else
-                        # Route doesn't exist or doesn't have onlink attribute
-                        # Log warning but don't modify
-                        log "WARNING" "Flannel route for $cidr_subnet appears to be missing or misconfigured. Not modifying due to MANAGE_FLANNEL_ROUTES=false."
-                        flannel_skipped=$((flannel_skipped + 1))
-                        continue
-                    fi
+                    flannel_skipped=$((flannel_skipped + 1))
+                    continue
                 fi
-                
+    
                 # If we get here, we're managing flannel routes
                 log "DEBUG" "Processing flannel route: $cidr_subnet (MANAGE_FLANNEL_ROUTES=true)"
             fi
@@ -1093,6 +1138,8 @@ export -f init_routes_core backup_routes restore_routes_from_backup
 export -f parse_extra_routes ensure_flannel_routes verify_routes get_route_summary
 export -f is_valid_route_ip is_valid_route_cidr is_valid_route_interface
 export -f is_flannel_route has_flannel_onlink_route
+export -f is_flannel_route has_flannel_onlink_route log_flannel_route_inventory
+export MANAGE_FLANNEL_ROUTES FLANNEL_NETWORK_PREFIX DETECT_FLANNEL_DOCKER_NETWORKS FLANNEL_ADDITIONAL_PREFIXES
 export MANAGE_FLANNEL_ROUTES FLANNEL_NETWORK_PREFIX
 export ROUTES_LAST_UPDATE_TIME ROUTES_UPDATE_INTERVAL
 export ROUTES_STATE_DIR ROUTES_BACKUP_FILE FLANNEL_ROUTES_EXTRA
