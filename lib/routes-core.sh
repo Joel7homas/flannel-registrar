@@ -568,34 +568,43 @@ ensure_flannel_routes() {
             if [[ "$gateway" != "$public_ip" ]]; then
                 if is_valid_route_cidr "$cidr_subnet" && is_valid_route_ip "$gateway"; then
 
-                    # For container subnets (10.5.x.x), always route through flannel.1
-                    if [[ "$cidr_subnet" == "10.5."* ]]; then
-                        # Remove any existing route using physical interfaces
-                        ip route del "$cidr_subnet" &>/dev/null || true
+                    # For container subnets (10.5.x.x), check if a docker bridge exists first
+                    if [[ "$cidr_subnet" == "10.5."* || "$cidr_subnet" == "172."* ]]; then
+                        # Check if a bridge interface exists for this subnet
+                        bridge_interface=""
                         
-                        # Add route through flannel.1
-                        if ip route add "$cidr_subnet" dev flannel.1 onlink via "$gateway"; then
-                            log "INFO" "Successfully added flannel route for $cidr_subnet via $gateway"
-                        else
-                            log "ERROR" "Failed to add flannel route for $cidr_subnet via $gateway"
-                        fi
-                    else
-                        log "DEBUG" "Routing for $cidr_subnet via gateway $gateway (target host: $public_ip)"
-    
-                        # Check if route via gateway exists
-                        if ip route show | grep -q "$cidr_subnet.*via $gateway"; then
-                            log "DEBUG" "Route already exists for $cidr_subnet via gateway $gateway"
-                            unchanged=$((unchanged + 1))
-                        else
-                            # Remove any direct routes first
+                        # Find the docker bridge interface that matches this subnet
+                        for bridge in $(ip link show type bridge | grep -o "caddy[^ ]*\|br[^ ]*" | tr -d ':'); do
+                            if ip addr show dev $bridge | grep -q "${cidr_subnet%/*}"; then
+                                bridge_interface="$bridge"
+                                break
+                            fi
+                        done
+                        
+                        if [ -n "$bridge_interface" ]; then
+                            # Remove any existing route
                             ip route del "$cidr_subnet" &>/dev/null || true
                             
-                            # Add the gateway route
-                            if ip route add "$cidr_subnet" via "$gateway"; then
-                                log "INFO" "Successfully added route for $cidr_subnet via gateway $gateway"
-                                added=$((added + 1))
+                            # Add direct route through bridge interface
+                            if ip route add "$cidr_subnet" dev "$bridge_interface" scope link; then
+                                log "INFO" "Successfully added direct bridge route for $cidr_subnet via $bridge_interface"
                             else
-                                log "ERROR" "Failed to add route for $cidr_subnet via gateway $gateway"
+                                log "ERROR" "Failed to add direct bridge route for $cidr_subnet via $bridge_interface"
+                            fi
+                        else
+                            # No matching bridge found, use regular routing
+                            log "DEBUG" "No matching bridge found for $cidr_subnet, using standard routing"
+                            
+                            # Check if route via gateway exists
+                            if ip route show | grep -q "$cidr_subnet.*via $gateway"; then
+                                log "DEBUG" "Route already exists for $cidr_subnet via gateway $gateway"
+                            else
+                                # Add the standard route
+                                if ip route add "$cidr_subnet" via "$gateway"; then
+                                    log "INFO" "Successfully added route for $cidr_subnet via gateway $gateway"
+                                else
+                                    log "ERROR" "Failed to add route for $cidr_subnet via gateway $gateway"
+                                fi
                             fi
                         fi
                     fi
