@@ -239,6 +239,7 @@ _etcd_v3_delete() {
 # List keys with a prefix from etcd v3
 # Usage: keys=$(_etcd_v3_list_keys "/prefix")
 # Enhanced _etcd_v3_list_keys function with better error handling
+# Enhanced _etcd_v3_list_keys function with better error handling
 _etcd_v3_list_keys() {
     local prefix="$1"
 
@@ -256,9 +257,6 @@ _etcd_v3_list_keys() {
         "${ETCD_ENDPOINT}/v3/kv/range" \
         -H "Content-Type: application/json" \
         -d "$payload" 2>&1)
-
-    # Log the raw response for debugging
-    log "DEBUG" "Raw etcd response: $response"
 
     # Validate response before processing
     if ! echo "$response" | grep -q "\"kvs\""; then
@@ -301,12 +299,6 @@ _etcd_v3_list_keys() {
         else
             log "WARNING" "No keys found in etcd response"
         fi
-    fi
-
-    # Check if any keys were actually output
-    if [ -z "$(cat)" ]; then
-        log "WARNING" "No keys were successfully processed"
-        return 1
     fi
 
     return 0
