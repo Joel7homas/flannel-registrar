@@ -1,6 +1,6 @@
 FROM alpine:3.18
 
-ARG VERSION=1.2.0-alpha.6
+ARG VERSION=1.2.0-alpha.18
 
 # Install required packages
 RUN apk add --no-cache \
@@ -55,6 +55,7 @@ COPY lib/common.sh \
      lib/recovery-core.sh \
      lib/recovery-actions.sh \
      lib/recovery-monitoring.sh \
+     lib/recovery-host.sh \
      /usr/local/lib/flannel-registrar/
 
 # Create a non-root user with a temporary GID/UID
