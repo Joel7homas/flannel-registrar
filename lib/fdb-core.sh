@@ -306,11 +306,7 @@ update_fdb_entries_from_etcd() {
         
         # Get all host status entries to find MAC addresses
         log "DEBUG" "Retrieving host status entries from etcd"
-        # Changed on 3/18/25 to fix connectivity problem with email
-        #local status_keys=$(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/_host_status/")
-        local status_keys=$(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/subnets/_host_status/")
-        log "DEBUG" "Found $(echo "$status_keys" | grep -v "^$" | wc -l) host status keys at ${FLANNEL_CONFIG_PREFIX}/subnets/_host_status/"
-
+        local status_keys=$(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/_host_status/")
         
         # Check if we have host status entries
         if [ -z "$status_keys" ]; then
@@ -320,18 +316,12 @@ update_fdb_entries_from_etcd() {
                 log "INFO" "Attempting to register local host status as fallback"
                 register_host_status
                 # Refresh the keys after registration
-                status_keys=$(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/subnets/_host_status/")
-
-                # Changed to line above on 3/18/25 to fix connectivity problem with email
-                #status_keys=$(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/_host_status/")
+                status_keys=$(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/_host_status/")
             elif type register_host_as_active &>/dev/null; then
                 log "INFO" "Attempting to register local host status as fallback using recovery-host"
                 register_host_as_active
                 # Refresh the keys after registration
-                status_keys=$(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/subnets/_host_status/")
-                
-                # Changed to line above on 3/18/25 to fix connectivity problem with email
-                #status_keys=$(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/_host_status/")
+                status_keys=$(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/_host_status/")
             fi
         fi
         
