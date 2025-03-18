@@ -264,6 +264,7 @@ get_all_active_hosts() {
     # Get all host status keys
     local status_keys=$(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/_host_status/")
     log "DEBUG" "Checking etcd for host status keys: (${FLANNEL_CONFIG_PREFIX}/_host_status/)"
+    log "DEBUG" "Raw status keys: ($status_keys)"
     
     if [ -z "$status_keys" ]; then
         log "WARNING" "No host status entries found in etcd"

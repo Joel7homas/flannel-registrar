@@ -249,7 +249,7 @@ _etcd_v3_list_keys() {
     local payload="{\"key\":\"$base64_prefix\",\"range_end\":\"$base64_end\",\"keys_only\":true}"
 
     # Log to stderr to avoid mixing with return values
-    log "DEBUG" "Sending etcd v3 LIST KEYS: $prefix" 
+    log "DEBUG" "Sending etcd v3 LIST KEYS: $prefix"
 
     # Send request to etcd
     local response=$(curl -s -X POST -m "$ETCD_TIMEOUT" \
@@ -257,9 +257,12 @@ _etcd_v3_list_keys() {
         -H "Content-Type: application/json" \
         -d "$payload" 2>&1)
 
+    # Log the raw response for debugging
+    log "DEBUG" "Raw etcd response: $response"
+
     # Validate response before processing
     if ! echo "$response" | grep -q "\"kvs\""; then
-        log "DEBUG" "etcd v3 LIST KEYS failed or no keys found: $prefix" 
+        log "WARNING" "etcd v3 LIST KEYS failed or no keys found: $prefix"
         return 1
     fi
 
@@ -273,23 +276,42 @@ _etcd_v3_list_keys() {
                     decoded_key=$(_etcd_base64_decode "$base64_key" 2>/dev/null || echo "")
                     if [ -n "$decoded_key" ]; then
                         echo "$decoded_key"
+                    else
+                        log "WARNING" "Failed to decode key: $base64_key"
                     fi
                 fi
             done
+        else
+            log "WARNING" "No keys found in etcd response"
         fi
     else
         # Fall back to grep/sed but with error handling
-        echo "$response" | grep -o '"key":"[^"]*"' | cut -d'"' -f4 | while read -r base64_key; do
-            if [ -n "$base64_key" ]; then
-                decoded_key=$(_etcd_base64_decode "$base64_key" 2>/dev/null || echo "")
-                if [ -n "$decoded_key" ]; then
-                    echo "$decoded_key"
+        local keys=$(echo "$response" | grep -o '"key":"[^"]*"' | cut -d'"' -f4)
+        if [ -n "$keys" ]; then
+            echo "$keys" | while read -r base64_key; do
+                if [ -n "$base64_key" ]; then
+                    decoded_key=$(_etcd_base64_decode "$base64_key" 2>/dev/null || echo "")
+                    if [ -n "$decoded_key" ]; then
+                        echo "$decoded_key"
+                    else
+                        log "WARNING" "Failed to decode key: $base64_key"
+                    fi
                 fi
-            fi
-        done
+            done
+        else
+            log "WARNING" "No keys found in etcd response"
+        fi
     fi
+
+    # Check if any keys were actually output
+    if [ -z "$(cat)" ]; then
+        log "WARNING" "No keys were successfully processed"
+        return 1
+    fi
+
     return 0
 }
+
 
 
 # ==========================================
