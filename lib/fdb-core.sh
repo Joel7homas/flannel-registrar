@@ -220,7 +220,11 @@ restore_fdb_from_backup() {
 # Update FDB entries from etcd
 # Usage: update_fdb_entries_from_etcd
 update_fdb_entries_from_etcd() {
+    log "DEBUG" "Entering update_fdb_entries_from_etcd function"
     local current_time=$(date +%s)
+
+    # Log the time since last update
+    log "DEBUG" "Time since last update: $((current_time - FDB_LAST_UPDATE_TIME)) seconds"
     
     # Only run full update every FDB_UPDATE_INTERVAL seconds
     if [ $((current_time - FDB_LAST_UPDATE_TIME)) -lt $FDB_UPDATE_INTERVAL ]; then
