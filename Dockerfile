@@ -1,6 +1,6 @@
 FROM alpine:3.18
 
-ARG VERSION=1.2.0-alpha.18
+ARG VERSION=1.2.0-alpha.20
 
 # Install required packages
 RUN apk add --no-cache \
