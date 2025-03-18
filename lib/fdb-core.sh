@@ -167,7 +167,10 @@ restore_fdb_from_backup() {
                 
                 # Add the new entry
                 if bridge fdb add "$mac" dev flannel.1 dst "$dst"; then
+                    log "DEBUG" "Successfully added FDB entry: $mac -> $dst"
                     successes=$((successes + 1))
+                else
+                    log "ERROR" "Failed to add FDB entry: $mac -> $dst"
                 fi
             fi
         done
@@ -254,6 +257,8 @@ update_fdb_entries_from_etcd() {
         
         # Get all active hosts using recovery-host functions
         local active_hosts=$(get_all_active_hosts)
+
+        log "DEBUG" "Active hosts from get_all_active_hosts: ($active_hosts)"
         
         if [ -n "$active_hosts" ]; then
             log "DEBUG" "Found active hosts using recovery-host.sh"
