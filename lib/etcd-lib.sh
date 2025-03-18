@@ -238,9 +238,10 @@ _etcd_v3_delete() {
 
 # List keys with a prefix from etcd v3
 # Usage: keys=$(_etcd_v3_list_keys "/prefix")
-# Enhanced _etcd_v3_list_keys function with step-by-step diagnostics
+# Enhanced _etcd_v3_list_keys function with working return value handling
 _etcd_v3_list_keys() {
     local prefix="$1"
+    local decoded_keys=""
 
     log "DEBUG" "Starting etcd v3 LIST KEYS for prefix: $prefix"
     
@@ -288,13 +289,11 @@ _etcd_v3_list_keys() {
     # Extract keys section for detailed parsing
     log "DEBUG" "Attempting to extract keys from response"
     
-    local keys_section=""
     if command -v jq &>/dev/null; then
-        keys_section=$(echo "$response" | jq -r '.kvs')
         log "DEBUG" "Extracted keys section using jq: ${keys_section:0:100}..."
         
         # Process each key individually with detailed logging
-        echo "$response" | jq -r '.kvs[].key' | while read -r base64_key; do
+        while read -r base64_key; do
             log "DEBUG" "Processing encoded key: $base64_key"
             
             # Explicitly decode with error checking
@@ -313,17 +312,14 @@ _etcd_v3_list_keys() {
             fi
             
             log "DEBUG" "Successfully decoded key: $decoded_key"
-            echo "$decoded_key"
-        done
+            decoded_keys="${decoded_keys}${decoded_key}$(printf '\n')"
+        done < <(echo "$response" | jq -r '.kvs[].key')
     else
         # Extract using grep/sed with detailed logging
         log "DEBUG" "JQ not available, falling back to grep/sed extraction"
         
-        # Extract key values with grep
-        keys_section=$(echo "$response" | grep -o '"key":"[^"]*"')
-        log "DEBUG" "Extracted keys using grep: ${keys_section:0:100}..."
-        
-        echo "$response" | grep -o '"key":"[^"]*"' | cut -d'"' -f4 | while read -r base64_key; do
+        # Process each key from grep extraction
+        while read -r base64_key; do
             log "DEBUG" "Processing encoded key from grep: $base64_key"
             
             # Explicitly decode with error checking
@@ -342,18 +338,18 @@ _etcd_v3_list_keys() {
             fi
             
             log "DEBUG" "Successfully decoded key: $decoded_key"
-            echo "$decoded_key"
-        done
+            decoded_keys="${decoded_keys}${decoded_key}$(printf '\n')"
+        done < <(echo "$response" | grep -o '"key":"[^"]*"' | cut -d'"' -f4)
     fi
     
-    # Check if any keys were output
-    local output=$(cat)
-    if [ -z "$output" ]; then
+    # Check if any keys were processed
+    if [ -z "$decoded_keys" ]; then
         log "WARNING" "No keys were successfully processed despite having keys in response"
         return 1
     fi
     
-    echo "$output"
+    # Return the decoded keys
+    echo "$decoded_keys"
     return 0
 }
 
