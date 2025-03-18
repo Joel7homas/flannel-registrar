@@ -306,6 +306,7 @@ update_fdb_entries_from_etcd() {
         fi
     else
         # Fallback to original method using direct etcd access
+        log "WARNING" "recovery-host.sh functions not available, using fallback method"
         log "DEBUG" "Falling back to direct etcd access for host status"
         
         # Get all host status entries to find MAC addresses
