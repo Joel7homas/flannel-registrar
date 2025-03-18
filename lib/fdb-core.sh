@@ -305,7 +305,7 @@ update_fdb_entries_from_etcd() {
         log "DEBUG" "Falling back to direct etcd access for host status"
         
         # Get all host status entries to find MAC addresses
-        log "DEBUG" "Retrieving host status entries from etcd"
+        log "DEBUG" "Retrieving host status entries from etcd: (${FLANNEL_CONFIG_PREFIX}/_host_status/)"
         local status_keys=$(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/_host_status/")
         
         # Check if we have host status entries
