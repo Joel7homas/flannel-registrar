@@ -82,7 +82,7 @@ register_host_as_active() {
     
     local key=$(create_host_status_key "$hostname")
     
-    log "INFO" "Registering host status for $hostname in etcd"
+    log "INFO" "Registering host status for $hostname in etcd: ($key)"
     
     # Try to write to etcd with retry
     local retry_count=0

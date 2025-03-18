@@ -238,72 +238,124 @@ _etcd_v3_delete() {
 
 # List keys with a prefix from etcd v3
 # Usage: keys=$(_etcd_v3_list_keys "/prefix")
-# Enhanced _etcd_v3_list_keys function with better error handling
-# Enhanced _etcd_v3_list_keys function with better error handling
+# Enhanced _etcd_v3_list_keys function with step-by-step diagnostics
 _etcd_v3_list_keys() {
     local prefix="$1"
 
+    log "DEBUG" "Starting etcd v3 LIST KEYS for prefix: $prefix"
+    
+    # Encode the prefix and range end
     local base64_prefix=$(_etcd_base64_encode "$prefix")
     local base64_end=$(_etcd_base64_encode "${prefix}\xff")
+    
+    log "DEBUG" "Encoded prefix: $base64_prefix"
+    log "DEBUG" "Encoded range end: $base64_end"
 
     # Create JSON payload
     local payload="{\"key\":\"$base64_prefix\",\"range_end\":\"$base64_end\",\"keys_only\":true}"
-
-    # Log to stderr to avoid mixing with return values
-    log "DEBUG" "Sending etcd v3 LIST KEYS: $prefix"
+    
+    log "DEBUG" "Sending JSON payload: $payload"
 
     # Send request to etcd
     local response=$(curl -s -X POST -m "$ETCD_TIMEOUT" \
         "${ETCD_ENDPOINT}/v3/kv/range" \
         -H "Content-Type: application/json" \
         -d "$payload" 2>&1)
+    
+    log "DEBUG" "Raw etcd response: ${response:0:200}..."
 
     # Validate response before processing
     if ! echo "$response" | grep -q "\"kvs\""; then
-        log "WARNING" "etcd v3 LIST KEYS failed or no keys found: $prefix"
+        log "WARNING" "etcd v3 LIST KEYS failed or no keys found in response"
+        return 1
+    fi
+    
+    # Check if the response contains keys
+    local key_count=0
+    if command -v jq &>/dev/null; then
+        key_count=$(echo "$response" | jq '.kvs | length')
+        log "DEBUG" "Response contains $key_count keys according to jq"
+    else
+        key_count=$(echo "$response" | grep -o '"key"' | wc -l)
+        log "DEBUG" "Response contains approximately $key_count keys according to grep"
+    fi
+    
+    if [ "$key_count" -eq 0 ]; then
+        log "WARNING" "Response contains 0 keys despite having kvs structure"
         return 1
     fi
 
-    # Extract and decode the keys with proper error handling
+    # Extract keys section for detailed parsing
+    log "DEBUG" "Attempting to extract keys from response"
+    
+    local keys_section=""
     if command -v jq &>/dev/null; then
-        # Use jq with error handling
-        local keys=$(echo "$response" | jq -r '.kvs[].key' 2>/dev/null || echo "")
-        if [ -n "$keys" ]; then
-            echo "$keys" | while read -r base64_key; do
-                if [ -n "$base64_key" ]; then
-                    decoded_key=$(_etcd_base64_decode "$base64_key" 2>/dev/null || echo "")
-                    if [ -n "$decoded_key" ]; then
-                        echo "$decoded_key"
-                    else
-                        log "WARNING" "Failed to decode key: $base64_key"
-                    fi
-                fi
-            done
-        else
-            log "WARNING" "No keys found in etcd response"
-        fi
+        keys_section=$(echo "$response" | jq -r '.kvs')
+        log "DEBUG" "Extracted keys section using jq: ${keys_section:0:100}..."
+        
+        # Process each key individually with detailed logging
+        echo "$response" | jq -r '.kvs[].key' | while read -r base64_key; do
+            log "DEBUG" "Processing encoded key: $base64_key"
+            
+            # Explicitly decode with error checking
+            local decoded_key=""
+            decoded_key=$(echo -n "$base64_key" | base64 -d 2>/dev/null)
+            local decode_status=$?
+            
+            if [ $decode_status -ne 0 ]; then
+                log "WARNING" "Base64 decoding failed for key: $base64_key"
+                continue
+            fi
+            
+            if [ -z "$decoded_key" ]; then
+                log "WARNING" "Decoded key is empty for: $base64_key"
+                continue
+            fi
+            
+            log "DEBUG" "Successfully decoded key: $decoded_key"
+            echo "$decoded_key"
+        done
     else
-        # Fall back to grep/sed but with error handling
-        local keys=$(echo "$response" | grep -o '"key":"[^"]*"' | cut -d'"' -f4)
-        if [ -n "$keys" ]; then
-            echo "$keys" | while read -r base64_key; do
-                if [ -n "$base64_key" ]; then
-                    decoded_key=$(_etcd_base64_decode "$base64_key" 2>/dev/null || echo "")
-                    if [ -n "$decoded_key" ]; then
-                        echo "$decoded_key"
-                    else
-                        log "WARNING" "Failed to decode key: $base64_key"
-                    fi
-                fi
-            done
-        else
-            log "WARNING" "No keys found in etcd response"
-        fi
+        # Extract using grep/sed with detailed logging
+        log "DEBUG" "JQ not available, falling back to grep/sed extraction"
+        
+        # Extract key values with grep
+        keys_section=$(echo "$response" | grep -o '"key":"[^"]*"')
+        log "DEBUG" "Extracted keys using grep: ${keys_section:0:100}..."
+        
+        echo "$response" | grep -o '"key":"[^"]*"' | cut -d'"' -f4 | while read -r base64_key; do
+            log "DEBUG" "Processing encoded key from grep: $base64_key"
+            
+            # Explicitly decode with error checking
+            local decoded_key=""
+            decoded_key=$(echo -n "$base64_key" | base64 -d 2>/dev/null)
+            local decode_status=$?
+            
+            if [ $decode_status -ne 0 ]; then
+                log "WARNING" "Base64 decoding failed for key: $base64_key"
+                continue
+            fi
+            
+            if [ -z "$decoded_key" ]; then
+                log "WARNING" "Decoded key is empty for: $base64_key"
+                continue
+            fi
+            
+            log "DEBUG" "Successfully decoded key: $decoded_key"
+            echo "$decoded_key"
+        done
     fi
-
+    
+    # Check if any keys were output
+    local output=$(cat)
+    if [ -z "$output" ]; then
+        log "WARNING" "No keys were successfully processed despite having keys in response"
+        return 1
+    fi
+    
+    echo "$output"
     return 0
 }
-
 
 
 # ==========================================
