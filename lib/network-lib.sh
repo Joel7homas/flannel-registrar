@@ -21,6 +21,14 @@ DEFAULT_INTERFACE=$(ip -o -4 route show to default | awk '{print $5}' | head -1)
 # Default MTU for flannel interface
 FLANNEL_MTU="${FLANNEL_MTU:-1370}"
 
+# VXLAN configuration
+VXLAN_CONFIG_CHECK="${VXLAN_CONFIG_CHECK:-true}"
+VXLAN_AUTO_FIX="${VXLAN_AUTO_FIX:-true}"
+
+# ==========================================
+# Initalization
+# ==========================================
+
 # Initialize network-lib module
 init_network_lib() {
     # Check dependencies
@@ -35,6 +43,12 @@ init_network_lib() {
         log "ERROR" "Failed to create network state directory: $network_state_dir"
         return 1
     }
+
+    # Check VXLAN interface configuration if enabled
+    if [ "$VXLAN_CONFIG_CHECK" = "true" ]; then
+        log "INFO" "Checking VXLAN interface configuration"
+        check_vxlan_interface_config "flannel.1" "$VXLAN_AUTO_FIX"
+    fi
     
     # Parse host gateway map from environment variable
     parse_host_gateway_map
@@ -44,6 +58,225 @@ init_network_lib() {
     log "INFO" "Default network interface: ${DEFAULT_INTERFACE:-unknown}"
     
     return 0
+}
+
+# ==========================================
+# Helper functions
+# ==========================================
+
+# Check if script is running inside a container
+# Usage: is_running_in_container
+# Returns: 0 if in container, 1 if not
+is_running_in_container() {
+    # Check for container-specific indicators
+    if [ -f "/.dockerenv" ] || grep -q "docker\|lxc" /proc/1/cgroup 2>/dev/null; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# ==========================================
+# VXLAN interface functions
+# ==========================================
+
+# Get current VXLAN interface configuration settings
+# Usage: get_vxlan_interface_config [interface]
+# Arguments:
+#   interface - Optional VXLAN interface name (default: flannel.1)
+# Output: Tab-delimited key-value pairs with configuration
+# Returns: 0 on success, 1 on failure
+get_vxlan_interface_config() {
+    local interface="${1:-flannel.1}"
+    
+    # Check if interface exists
+    if ! ip link show dev "$interface" &>/dev/null; then
+        log "ERROR" "Interface $interface does not exist"
+        return 1
+    fi
+    
+    # Check if interface is a VXLAN interface
+    if ! ip -d link show dev "$interface" | grep -q "vxlan"; then
+        log "ERROR" "$interface is not a VXLAN interface"
+        return 1
+    fi
+    
+    # Get learning mode setting (check if nolearning flag is present)
+    local learning_mode="enabled"
+    if ip -d link show dev "$interface" | grep -q "nolearning"; then
+        learning_mode="disabled"
+    fi
+    
+    # Get proxy_arp setting
+    local proxy_arp="$(cat /proc/sys/net/ipv4/conf/$interface/proxy_arp 2>/dev/null || echo "unknown")"
+    
+    # Get arp_accept setting
+    local arp_accept="$(cat /proc/sys/net/ipv4/conf/$interface/arp_accept 2>/dev/null || echo "unknown")"
+    
+    # Output configuration as tab-delimited key-value pairs
+    echo -e "interface\t$interface"
+    echo -e "learning_mode\t$learning_mode"
+    echo -e "proxy_arp\t$proxy_arp"
+    echo -e "arp_accept\t$arp_accept"
+    
+    # Extra debug info if DEBUG is true
+    if [ "$DEBUG" = "true" ]; then
+        # Get full interface details
+        local vxlan_details="$(ip -d link show dev "$interface" | grep -oP 'vxlan.*' || echo "unknown")"
+        echo -e "vxlan_details\t$vxlan_details"
+    fi
+    
+    return 0
+}
+
+# Check VXLAN interface configuration and optionally fix issues
+# Usage: check_vxlan_interface_config [interface] [auto_fix]
+# Arguments:
+#   interface - Optional VXLAN interface name (default: flannel.1)
+#   auto_fix - Optional boolean to enable auto-fixing (default: false)
+# Returns: 0 if no issues found, non-zero count of issues found
+check_vxlan_interface_config() {
+    local interface="${1:-flannel.1}"
+    local auto_fix="${2:-false}"
+    local issues=0
+    
+    log "INFO" "Checking VXLAN interface configuration for $interface"
+    
+    # Check if interface exists
+    if ! ip link show dev "$interface" &>/dev/null; then
+        log "ERROR" "Interface $interface does not exist"
+        return 1
+    fi
+    
+    # Check if interface is up
+    local state=$(ip link show dev "$interface" | grep -o "state [^ ]*" | cut -d' ' -f2)
+    if [ "$state" != "UP" ] && [ "$state" != "UNKNOWN" ]; then
+        log "WARNING" "Interface $interface is not up (state: $state)"
+        issues=$((issues + 1))
+        
+        if [ "$auto_fix" = "true" ]; then
+            log "INFO" "Bringing up interface $interface"
+            if ! ip link set "$interface" up; then
+                log "ERROR" "Failed to bring up interface $interface"
+            else
+                log "INFO" "Successfully brought up interface $interface"
+                issues=$((issues - 1))
+            fi
+        fi
+    fi
+    
+    # Check learning mode (should be enabled, i.e., 'nolearning' flag should not be present)
+    if ip -d link show dev "$interface" | grep -q "nolearning"; then
+        log "WARNING" "Learning mode is disabled on $interface"
+        issues=$((issues + 1))
+        
+        if [ "$auto_fix" = "true" ]; then
+            log "INFO" "Enabling learning mode on $interface"
+            # Check if running in container
+            if is_running_in_container; then
+                log "INFO" "Running in container, trying to delegate to host"
+                if type delegate_host_action &>/dev/null; then
+                    delegate_host_action "ip link set $interface type vxlan learning"
+                else
+                    log "WARNING" "delegate_host_action not available, attempting direct command"
+                    if ! ip link set "$interface" type vxlan learning; then
+                        log "ERROR" "Failed to enable learning mode on $interface"
+                    else
+                        log "INFO" "Successfully enabled learning mode on $interface"
+                        issues=$((issues - 1))
+                    fi
+                fi
+            else
+                if ! ip link set "$interface" type vxlan learning; then
+                    log "ERROR" "Failed to enable learning mode on $interface"
+                else
+                    log "INFO" "Successfully enabled learning mode on $interface"
+                    issues=$((issues - 1))
+                fi
+            fi
+        fi
+    else
+        log "DEBUG" "Learning mode is correctly enabled on $interface"
+    fi
+    
+    # Check proxy_arp (should be 1)
+    local proxy_arp=$(cat /proc/sys/net/ipv4/conf/$interface/proxy_arp 2>/dev/null || echo "unknown")
+    if [ "$proxy_arp" != "1" ]; then
+        log "WARNING" "proxy_arp is not enabled on $interface (value: $proxy_arp)"
+        issues=$((issues + 1))
+        
+        if [ "$auto_fix" = "true" ]; then
+            log "INFO" "Enabling proxy_arp on $interface"
+            # Check if running in container
+            if is_running_in_container; then
+                log "INFO" "Running in container, trying to delegate to host"
+                if type delegate_host_action &>/dev/null; then
+                    delegate_host_action "echo 1 > /proc/sys/net/ipv4/conf/$interface/proxy_arp"
+                else
+                    log "WARNING" "delegate_host_action not available, attempting direct command"
+                    if ! echo 1 > /proc/sys/net/ipv4/conf/$interface/proxy_arp 2>/dev/null; then
+                        log "ERROR" "Failed to enable proxy_arp on $interface"
+                    else
+                        log "INFO" "Successfully enabled proxy_arp on $interface"
+                        issues=$((issues - 1))
+                    fi
+                fi
+            else
+                if ! echo 1 > /proc/sys/net/ipv4/conf/$interface/proxy_arp 2>/dev/null; then
+                    log "ERROR" "Failed to enable proxy_arp on $interface"
+                else
+                    log "INFO" "Successfully enabled proxy_arp on $interface"
+                    issues=$((issues - 1))
+                fi
+            fi
+        fi
+    else
+        log "DEBUG" "proxy_arp is correctly enabled on $interface"
+    fi
+    
+    # Check arp_accept (should be 1)
+    local arp_accept=$(cat /proc/sys/net/ipv4/conf/$interface/arp_accept 2>/dev/null || echo "unknown")
+    if [ "$arp_accept" != "1" ]; then
+        log "WARNING" "arp_accept is not enabled on $interface (value: $arp_accept)"
+        issues=$((issues + 1))
+        
+        if [ "$auto_fix" = "true" ]; then
+            log "INFO" "Enabling arp_accept on $interface"
+            # Check if running in container
+            if is_running_in_container; then
+                log "INFO" "Running in container, trying to delegate to host"
+                if type delegate_host_action &>/dev/null; then
+                    delegate_host_action "echo 1 > /proc/sys/net/ipv4/conf/$interface/arp_accept"
+                else
+                    log "WARNING" "delegate_host_action not available, attempting direct command"
+                    if ! echo 1 > /proc/sys/net/ipv4/conf/$interface/arp_accept 2>/dev/null; then
+                        log "ERROR" "Failed to enable arp_accept on $interface"
+                    else
+                        log "INFO" "Successfully enabled arp_accept on $interface"
+                        issues=$((issues - 1))
+                    fi
+                fi
+            else
+                if ! echo 1 > /proc/sys/net/ipv4/conf/$interface/arp_accept 2>/dev/null; then
+                    log "ERROR" "Failed to enable arp_accept on $interface"
+                else
+                    log "INFO" "Successfully enabled arp_accept on $interface"
+                    issues=$((issues - 1))
+                fi
+            fi
+        fi
+    else
+        log "DEBUG" "arp_accept is correctly enabled on $interface"
+    fi
+    
+    # Summary
+    if [ $issues -eq 0 ]; then
+        log "INFO" "VXLAN interface $interface is correctly configured"
+    else
+        log "WARNING" "Found $issues issue(s) with VXLAN interface $interface configuration"
+    fi
+    
+    return $issues
 }
 
 # ==========================================
@@ -572,6 +805,7 @@ get_host_for_subnet() {
 }
 
 # Export necessary functions and variables
+export -f get_vxlan_interface_config check_vxlan_interface_config is_running_in_container
 export -f parse_host_gateway_map get_host_gateway
 export -f is_ip_in_subnet convert_subnet_to_cidr convert_cidr_to_subnet_key
 export -f get_first_ip_in_subnet
