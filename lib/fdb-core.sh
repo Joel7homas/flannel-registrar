@@ -382,7 +382,13 @@ update_fdb_entries_from_etcd() {
     
     # Get subnet entries to find IP addresses
     log "DEBUG" "Retrieving subnet entries from etcd"
-    local subnet_keys=$(etcd_list_keys "${FLANNEL_PREFIX}/subnets/")
+    local subnet_keys=""
+    while read -r key; do
+        if [ -n "$key" ]; then
+            subnet_keys+="$key "
+        fi
+    done < <(etcd_list_keys "${FLANNEL_PREFIX}/subnets/")
+
     # If we already have host_ips from recovery-host, don't reinitialize the array
     if [ "$host_count" -eq 0 ]; then
         local host_ips=()
