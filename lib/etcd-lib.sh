@@ -384,6 +384,7 @@ _etcd_v3_list_keys() {
 }
 
 
+
 # ==========================================
 # ETCD CRUD operations - v2 API
 # ==========================================
@@ -546,13 +547,26 @@ etcd_delete() {
 etcd_list_keys() {
     local prefix="$1"
     
-    if [[ "$ETCDCTL_API" == "3" ]]; then
-        _etcd_v3_list_keys "$prefix"
+    # API-specific implementation
+    local keys=""
+    if [ "$ETCDCTL_API" = "3" ]; then
+        # Get keys with etcd v3 API
+        while read -r key; do
+            if [ -n "$key" ]; then
+                keys+=" $key"
+            fi
+        done < <(_etcd_v3_list_keys "$prefix")
     else
-        _etcd_v2_list_keys "$prefix"
+        # Get keys with etcd v2 API
+        while read -r key; do
+            if [ -n "$key" ]; then
+                keys+=" $key"
+            fi
+        done < <(_etcd_v2_list_keys "$prefix")
     fi
     
-    return $?
+    echo "$keys"
+    return 0
 }
 
 # Check if a key exists in etcd

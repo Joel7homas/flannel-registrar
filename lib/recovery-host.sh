@@ -262,7 +262,13 @@ get_all_active_hosts() {
     local active_hosts=""
     
     # Get all host status keys
-    local status_keys=$(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/_host_status/")
+    local status_keys=""
+    while read -r key; do
+        if [ -n "$key" ]; then
+            status_keys+=" $key"
+        fi
+    done < <(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/_host_status/")
+
     log "DEBUG" "Checking etcd for host status keys: (${FLANNEL_CONFIG_PREFIX}/_host_status/)"
     log "DEBUG" "Raw status keys: ($status_keys)"
     
@@ -387,7 +393,12 @@ clean_stale_host_status() {
     local cleaned=0
     
     # Get all host status keys
-    local status_keys=$(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/_host_status/")
+    local status_keys=""
+    while read -r key; do
+        if [ -n "$key" ]; then
+            status_keys+=" $key"
+        fi
+    done < <(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/_host_status/")
     
     if [ -z "$status_keys" ]; then
         log "DEBUG" "No host status entries found to clean up"

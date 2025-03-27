@@ -558,8 +558,12 @@ ensure_flannel_routes() {
     declare -A DETECTED_GATEWAYS
     
     # Get all subnet entries with their PublicIPs
-    local subnet_keys
-    subnet_keys=$(etcd_list_keys "${FLANNEL_PREFIX}/subnets/")
+    local subnet_keys=""
+    while read -r key; do
+        if [ -n "$key" ]; then
+            subnet_keys+=" $key"
+        fi
+    done < <(etcd_list_keys "${FLANNEL_PREFIX}/subnets/")
     
     if [[ -z "$subnet_keys" ]]; then
         log "WARNING" "No subnet entries found or could not access etcd."
@@ -1040,7 +1044,14 @@ verify_routes() {
     # Get all expected subnet routes
     local expected_routes=()
     
-    for key in $(etcd_list_keys "${FLANNEL_PREFIX}/subnets/"); do
+    local all_subnet_keys=""
+    while read -r key; do
+        if [ -n "$key" ]; then
+            all_subnet_keys+=" $key"
+        fi
+    done < <(etcd_list_keys "${FLANNEL_PREFIX}/subnets/")
+
+    for key in $all_subnet_keys; do
         local subnet_id=$(basename "$key")
         local cidr_subnet=$(echo "$subnet_id" | sed 's/-/\//g')
         local subnet_data=$(etcd_get "$key")
