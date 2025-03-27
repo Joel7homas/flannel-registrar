@@ -574,6 +574,13 @@ ensure_flannel_routes() {
     log "DEBUG" "Analyzing network topology for indirect routing..."
     for key in $subnet_keys; do
         local subnet_id=$(basename "$key")
+
+        # Validate key to ensure it's not a concatenated key
+        if [[ "$key" == *"/"*"/"* ]] && [[ $(echo "$key" | grep -o "/" | wc -l) -gt 5 ]]; then
+            log "WARNING" "Skipping potentially concatenated key: $key"
+            continue
+        fi
+
         local subnet_data=$(etcd_get "$key")
         
         if [[ -n "$subnet_data" ]]; then

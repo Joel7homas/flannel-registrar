@@ -316,7 +316,12 @@ update_fdb_entries_from_etcd() {
         
         # Get all host status entries to find MAC addresses
         log "DEBUG" "Retrieving host status entries from etcd: (${FLANNEL_CONFIG_PREFIX}/_host_status/)"
-        local status_keys=$(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/_host_status/")
+        local status_keys=()
+        while read -r key; do
+            if [ -n "$key" ]; then
+                status_keys+=("$key")
+            fi
+        done < <(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/_host_status/")
         
         # Check if we have host status entries
         if [ -z "$status_keys" ]; then
@@ -336,15 +341,21 @@ update_fdb_entries_from_etcd() {
         fi
         
         # Process host status entries if available
-        for key in $status_keys; do
+        for key in "${status_keys[@]}"; do
             if [ -z "$key" ]; then
+                continue
+            fi
+            
+            # Validate key to ensure it's not a concatenated key
+            if [[ "$key" == *"/"*"/"* ]] && [[ $(echo "$key" | grep -o "/" | wc -l) -gt 4 ]]; then
+                log "WARNING" "Skipping potentially concatenated host status key: $key"
                 continue
             fi
             
             local host=$(basename "$key")
             log "DEBUG" "Processing host status for $host"
             local status_data=$(etcd_get "$key")
-            
+                    
             if [ -n "$status_data" ]; then
                 local vtep_mac=""
                 local primary_ip=""
@@ -380,12 +391,12 @@ update_fdb_entries_from_etcd() {
         log "INFO" "Found $host_count hosts with VTEP MAC addresses"
     fi
     
-    # Get subnet entries to find IP addresses
+    # Get all subnet entries to find IP addresses
     log "DEBUG" "Retrieving subnet entries from etcd"
-    local subnet_keys=""
+    local subnet_keys=()
     while read -r key; do
         if [ -n "$key" ]; then
-            subnet_keys+="$key "
+            subnet_keys+=("$key")
         fi
     done < <(etcd_list_keys "${FLANNEL_PREFIX}/subnets/")
 
@@ -400,7 +411,7 @@ update_fdb_entries_from_etcd() {
         log "WARNING" "No subnet entries found in etcd. Flannel may not be properly configured."
     fi
     
-    for key in $subnet_keys; do
+    for key in "${subnet_keys[@]}"; do
         if [ -z "$key" ]; then
             continue
         fi
@@ -411,8 +422,14 @@ update_fdb_entries_from_etcd() {
             continue
         fi
         
+        # Validate key to ensure it's not a concatenated key
+        if [[ "$key" == *"/"*"/"* ]] && [[ $(echo "$key" | grep -o "/" | wc -l) -gt 5 ]]; then
+            log "WARNING" "Skipping potentially concatenated key: $key"
+            continue
+        fi
+    
         local subnet_data=$(etcd_get "$key")
-        
+    
         if [ -n "$subnet_data" ]; then
             local public_ip=""
             local host=""
