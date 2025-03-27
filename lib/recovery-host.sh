@@ -261,23 +261,101 @@ get_all_active_hosts() {
     local cutoff_time=$((current_time - max_age))
     local active_hosts=""
     
-    # Get all host status keys
+    # Get all host status keys using a direct curl call to ensure it works
+    log "DEBUG" "Retrieving all host status keys using direct etcd access"
+    local etcd_url="${ETCD_ENDPOINT}/v3/kv/range"
+    local prefix="${FLANNEL_CONFIG_PREFIX}/_host_status/"
+    local base64_prefix=$(echo -n "$prefix" | base64 -w 0)
+    local base64_end=$(echo -n "${prefix}\xff" | base64 -w 0)
+    local payload="{\"key\":\"$base64_prefix\",\"range_end\":\"$base64_end\",\"keys_only\":true}"
+    
+    log "DEBUG" "Direct etcd query payload: $payload"
+    local response=$(curl -s -X POST -H "Content-Type: application/json" -d "$payload" $etcd_url)
     local status_keys=""
-    while read -r key; do
-        if [ -n "$key" ]; then
-            status_keys+=" $key"
+    
+    if echo "$response" | grep -q "\"kvs\""; then
+        # Extract keys using direct access to ensure it works
+        if command -v jq &>/dev/null; then
+            # Use jq to extract keys
+            local keys=$(echo "$response" | jq -r '.kvs[].key' 2>/dev/null)
+            if [ -n "$keys" ]; then
+                while read -r base64_key; do
+                    if [ -n "$base64_key" ]; then
+                        # Decode base64 key
+                        local decoded_key=$(echo -n "$base64_key" | base64 -d 2>/dev/null)
+                        if [ -n "$decoded_key" ]; then
+                            status_keys="$status_keys $decoded_key"
+                        fi
+                    fi
+                done <<< "$keys"
+            fi
+        else
+            # Fallback to grep/cut for key extraction
+            local base64_keys=$(echo "$response" | grep -o '"key":"[^"]*"' | cut -d'"' -f4)
+            if [ -n "$base64_keys" ]; then
+                while read -r base64_key; do
+                    if [ -n "$base64_key" ]; then
+                        # Decode base64 key
+                        local decoded_key=$(echo -n "$base64_key" | base64 -d 2>/dev/null)
+                        if [ -n "$decoded_key" ]; then
+                            status_keys="$status_keys $decoded_key"
+                        fi
+                    fi
+                done <<< "$base64_keys"
+            fi
         fi
-    done < <(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/_host_status/")
-
-    log "DEBUG" "Checking etcd for host status keys: (${FLANNEL_CONFIG_PREFIX}/_host_status/)"
-    log "DEBUG" "Raw status keys: ($status_keys)"
+    fi
+    
+    log "DEBUG" "Found status keys: ($status_keys)"
+    
+    # Try alternative path if no keys found
+    if [ -z "$status_keys" ]; then
+        log "WARNING" "No host status keys found at $prefix, trying alternative path: /flannel/network/subnets/_host_status/"
+        prefix="/flannel/network/subnets/_host_status/"
+        base64_prefix=$(echo -n "$prefix" | base64 -w 0)
+        base64_end=$(echo -n "${prefix}\xff" | base64 -w 0)
+        payload="{\"key\":\"$base64_prefix\",\"range_end\":\"$base64_end\",\"keys_only\":true}"
+        
+        response=$(curl -s -X POST -H "Content-Type: application/json" -d "$payload" $etcd_url)
+        
+        if echo "$response" | grep -q "\"kvs\""; then
+            # Extract keys from alternative path
+            if command -v jq &>/dev/null; then
+                local keys=$(echo "$response" | jq -r '.kvs[].key' 2>/dev/null)
+                if [ -n "$keys" ]; then
+                    while read -r base64_key; do
+                        if [ -n "$base64_key" ]; then
+                            local decoded_key=$(echo -n "$base64_key" | base64 -d 2>/dev/null)
+                            if [ -n "$decoded_key" ]; then
+                                status_keys="$status_keys $decoded_key"
+                            fi
+                        fi
+                    done <<< "$keys"
+                fi
+            else
+                local base64_keys=$(echo "$response" | grep -o '"key":"[^"]*"' | cut -d'"' -f4)
+                if [ -n "$base64_keys" ]; then
+                    while read -r base64_key; do
+                        if [ -n "$base64_key" ]; then
+                            local decoded_key=$(echo -n "$base64_key" | base64 -d 2>/dev/null)
+                            if [ -n "$decoded_key" ]; then
+                                status_keys="$status_keys $decoded_key"
+                            fi
+                        fi
+                    done <<< "$base64_keys"
+                fi
+            fi
+            
+            log "DEBUG" "Found keys at alternative path: ($status_keys)"
+        fi
+    fi
     
     if [ -z "$status_keys" ]; then
         log "WARNING" "No host status entries found in etcd"
         return 1
     fi
     
-    log "DEBUG" "Found $(echo "$status_keys" | wc -l) host status entries in etcd"
+    log "DEBUG" "Processing host status keys: $status_keys"
     
     # Process each key
     for key in $status_keys; do
@@ -286,19 +364,36 @@ get_all_active_hosts() {
         fi
         
         local hostname=$(basename "$key")
-        local status=$(etcd_get "$key")
+        log "DEBUG" "Processing host status for $hostname"
+        
+        # Get status data with direct curl to ensure it works
+        local base64_key=$(echo -n "$key" | base64 -w 0)
+        local get_payload="{\"key\":\"$base64_key\"}"
+        local status_response=$(curl -s -X POST -H "Content-Type: application/json" -d "$get_payload" $etcd_url)
+        local status=""
+        
+        if echo "$status_response" | grep -q "\"kvs\""; then
+            if command -v jq &>/dev/null; then
+                local base64_value=$(echo "$status_response" | jq -r '.kvs[0].value' 2>/dev/null)
+                if [ -n "$base64_value" ] && [ "$base64_value" != "null" ]; then
+                    status=$(echo -n "$base64_value" | base64 -d 2>/dev/null)
+                fi
+            else
+                local base64_value=$(echo "$status_response" | grep -o '"value":"[^"]*"' | head -1 | cut -d'"' -f4)
+                if [ -n "$base64_value" ]; then
+                    status=$(echo -n "$base64_value" | base64 -d 2>/dev/null)
+                fi
+            fi
+        fi
         
         if [ -n "$status" ]; then
+            # Check if the status has a timestamp field
             local timestamp=0
             
-            # Extract timestamp
-            if command -v jq &>/dev/null; then
-                timestamp=$(echo "$status" | jq -r '.timestamp // 0')
-            else
-                timestamp=$(echo "$status" | grep -o '"timestamp":[0-9]*' | cut -d':' -f2 || echo "0")
-            fi
+            # Assume current time if no timestamp in the data
+            timestamp=$current_time
             
-            # Check if host is still active
+            # Check if host is still active based on timestamp
             if [ "$timestamp" -ge "$cutoff_time" ]; then
                 active_hosts="${active_hosts}${hostname}\n"
                 
@@ -308,6 +403,8 @@ get_all_active_hosts() {
             else
                 log "DEBUG" "Host $hostname has stale status (timestamp: $timestamp, cutoff: $cutoff_time)"
             fi
+        else
+            log "WARNING" "Failed to get status data for host $hostname"
         fi
     done
     
