@@ -548,25 +548,15 @@ etcd_list_keys() {
     local prefix="$1"
     
     # API-specific implementation
-    local keys=""
     if [ "$ETCDCTL_API" = "3" ]; then
         # Get keys with etcd v3 API
-        while read -r key; do
-            if [ -n "$key" ]; then
-                keys+=" $key"
-            fi
-        done < <(_etcd_v3_list_keys "$prefix")
+        _etcd_v3_list_keys "$prefix"
     else
         # Get keys with etcd v2 API
-        while read -r key; do
-            if [ -n "$key" ]; then
-                keys+=" $key"
-            fi
-        done < <(_etcd_v2_list_keys "$prefix")
+        _etcd_v2_list_keys "$prefix"
     fi
     
-    echo "$keys"
-    return 0
+    return $?
 }
 
 # Check if a key exists in etcd
