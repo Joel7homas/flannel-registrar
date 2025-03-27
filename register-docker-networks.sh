@@ -533,12 +533,17 @@ main() {
     
     # Verify registered subnets
     log "INFO" "Verifying registered subnets in etcd"
-    registered_subnets=$(etcd_list_keys "${FLANNEL_PREFIX}/subnets/")
+    local registered_subnets=()
+    while read -r key; do
+        if [ -n "$key" ]; then
+            registered_subnets+=("$key")
+        fi
+    done < <(etcd_list_keys "${FLANNEL_PREFIX}/subnets/")
     
-    if [ -n "$registered_subnets" ]; then
-      log "INFO" "Subnets registered in etcd: $(echo "$registered_subnets" | wc -l)"
+    if [ ${#registered_subnets[@]} -gt 0 ]; then
+        log "INFO" "Subnets registered in etcd: ${#registered_subnets[@]}"
     else
-      log "WARNING" "No subnets found in etcd"
+        log "WARNING" "No subnets found in etcd"
     fi
   fi
   

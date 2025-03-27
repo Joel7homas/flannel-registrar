@@ -144,9 +144,14 @@ ensure_flannel_iptables() {
         log "ERROR" "iptables command not found. Cannot configure firewall rules."
         return 1
     fi
-    
+
     # Get main flannel network from etcd
+    if [[ "${FLANNEL_PREFIX}/config" == *"/"*"/"* ]] && [[ $(echo "${FLANNEL_PREFIX}/config" | grep -o "/" | wc -l) -gt 5 ]]; then
+        log "WARNING" "Invalid key format: ${FLANNEL_PREFIX}/config"
+        return 1
+    fi
     local flannel_config=$(etcd_get "${FLANNEL_PREFIX}/config")
+    
     if [[ -z "$flannel_config" ]]; then
         log "WARNING" "Could not retrieve Flannel network config from etcd."
         return 1

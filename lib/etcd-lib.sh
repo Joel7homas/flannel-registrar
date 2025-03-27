@@ -721,11 +721,15 @@ cleanup_localhost_entries() {
     
     # Get all subnet entries
     log "DEBUG" "Attempting to list subnet keys from ${FLANNEL_PREFIX}/subnets/"
-    local subnet_keys=""
     
     # Try to get subnet keys with error handling
     set +e  # Disable exit on error temporarily
-    subnet_keys=$(etcd_list_keys "${FLANNEL_PREFIX}/subnets/")
+    local subnet_keys=()
+    while read -r key; do
+        if [ -n "$key" ]; then
+            subnet_keys+=("$key")
+        fi
+    done < <(etcd_list_keys "${FLANNEL_PREFIX}/subnets/")
     local list_result=$?
     set -e  # Re-enable exit on error
     
@@ -748,7 +752,7 @@ cleanup_localhost_entries() {
     local error_count=0
     
     # Process each subnet key with careful error handling
-    while read -r key; do
+    for key in "${subnet_keys[@]}"; do
         # Skip empty lines
         [ -z "$key" ] && continue
         
@@ -795,7 +799,7 @@ cleanup_localhost_entries() {
         else 
             log "DEBUG" "Key $key does not contain localhost IP, skipping"
         fi
-    done <<< "$subnet_keys"
+    done
     
     if [[ $cleaned_count -gt 0 ]]; then
         log "INFO" "Cleaned up $cleaned_count entries with localhost IPs"
