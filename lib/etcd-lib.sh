@@ -61,6 +61,31 @@ init_etcd_lib() {
 # Private helper functions
 # ==========================================
 
+# Add a new helper function to get multiple keys
+etcd_get_multiple() {
+    local keys="$1"  # Space-separated list of keys
+    local results=""
+    local success=0
+    
+    for key in $keys; do
+        local value=$(etcd_get "$key")
+        if [ $? -eq 0 ]; then
+            # Format the output as key=value
+            results="${results}${key}=${value}\n"
+            success=1
+        fi
+    done
+    
+    if [ $success -eq 1 ]; then
+        echo -e "$results"
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Delete a key from etcd v3
+
 # Check connectivity to etcd
 # Returns 0 if successful, 1 otherwise
 _etcd_check_connectivity() {
@@ -163,6 +188,13 @@ _etcd_v3_put() {
 _etcd_v3_get() {
     local key="$1"
     
+    # Validate the key is a single entity - not multiple keys
+    if [[ "$key" == *"/"*"/"* ]] && [[ $(echo "$key" | grep -o "/" | wc -l) -gt 2 ]]; then
+        log "WARNING" "Attempted to get multiple keys in a single request: $key"
+        log "WARNING" "This operation is not supported. Please query keys individually."
+        return 1
+    }
+    
     local base64_key=$(_etcd_base64_encode "$key")
     
     # Create JSON payload
@@ -180,8 +212,7 @@ _etcd_v3_get() {
     # Check response
     if echo "$response" | grep -q "\"kvs\""; then
         # Extract the value (base64 encoded)
-        # Use grep/cut for compatibility with systems without jq
-        local base64_value
+        local base64_value=""
         if command -v jq &>/dev/null; then
             base64_value=$(echo "$response" | jq -r '.kvs[0].value' 2>/dev/null)
             # Check if jq returned an error or null
@@ -208,7 +239,6 @@ _etcd_v3_get() {
     return 1
 }
 
-# Delete a key from etcd v3
 # Usage: _etcd_v3_delete "/key"
 _etcd_v3_delete() {
     local key="$1"
@@ -769,6 +799,6 @@ cleanup_localhost_entries() {
 
 # Export necessary functions and variables
 export -f etcd_put etcd_get etcd_delete etcd_list_keys
-export -f etcd_key_exists initialize_etcd cleanup_localhost_entries
+export -f etcd_key_exists initialize_etcd cleanup_localhost_entries etcd_get_multiple
 export ETCD_ENDPOINT ETCDCTL_API ETCD_STATE_DIR
 export ETCD_TIMEOUT ETCD_RETRY_COUNT ETCD_RETRY_DELAY
