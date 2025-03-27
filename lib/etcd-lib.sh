@@ -377,6 +377,11 @@ _etcd_v3_list_keys() {
         log "WARNING" "No keys were successfully processed despite having keys in response"
         return 1
     fi
+
+    # Add near the end of _etcd_v3_list_keys function, just before returning
+    log "DEBUG" "Keys returned from _etcd_v3_list_keys (count: $(echo "$decoded_keys" | wc -l)): "
+    log "DEBUG" "First few keys: $(echo "$decoded_keys" | head -3)"
+    log "DEBUG" "Raw decoded_keys output format: $(echo "$decoded_keys" | od -c | head -3)"
     
     # Return the decoded keys
     echo "$decoded_keys"
@@ -720,6 +725,14 @@ cleanup_localhost_entries() {
             subnet_keys+=("$key")
         fi
     done < <(etcd_list_keys "${FLANNEL_PREFIX}/subnets/")
+
+    # Add at the beginning of the function after the subnet_keys array is populated
+    log "DEBUG" "cleanup_localhost_entries: subnet_keys array has ${#subnet_keys[@]} elements"
+    if [ ${#subnet_keys[@]} -gt 0 ]; then
+        log "DEBUG" "First element: ${subnet_keys[0]}"
+        log "DEBUG" "All elements: ${subnet_keys[*]}"
+    fi
+
     local list_result=$?
     set -e  # Re-enable exit on error
     

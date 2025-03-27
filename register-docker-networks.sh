@@ -478,7 +478,9 @@ main() {
   
   # Clean up localhost entries in etcd
   log "INFO" "Cleaning up problematic etcd entries"
+  log "DEBUG" "Calling cleanup_localhost_entries"
   cleanup_localhost_entries
+  log "DEBUG" "Completed cleanup_localhost_entries"
   
   # Get Docker networks
   log "INFO" "Discovering Docker networks on $HOST_NAME"
