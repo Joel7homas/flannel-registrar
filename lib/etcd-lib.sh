@@ -320,72 +320,30 @@ _etcd_v3_list_keys() {
     log "DEBUG" "Attempting to extract keys from response"
     
     if command -v jq &>/dev/null; then
-        log "DEBUG" "Extracted keys section using jq: ${keys_section:0:100}..."
-        
-        # Process each key individually with detailed logging
-        while read -r base64_key; do
-            log "DEBUG" "Processing encoded key: $base64_key"
-            
-            # Explicitly decode with error checking
-            local decoded_key=""
-            decoded_key=$(echo -n "$base64_key" | base64 -d 2>/dev/null)
-            local decode_status=$?
-            
-            if [ $decode_status -ne 0 ]; then
-                log "WARNING" "Base64 decoding failed for key: $base64_key"
-                continue
+        log "DEBUG" "Using jq to extract keys"
+        # Fix: Process each key separately with newlines
+        echo "$response" | jq -r '.kvs[].key' | while read -r base64_key; do
+            if [ -n "$base64_key" ]; then
+                decoded_key=$(_etcd_base64_decode "$base64_key" 2>/dev/null)
+                if [ -n "$decoded_key" ]; then
+                    echo "$decoded_key"
+                fi
             fi
-            
-            if [ -z "$decoded_key" ]; then
-                log "WARNING" "Decoded key is empty for: $base64_key"
-                continue
-            fi
-            
-            log "DEBUG" "Successfully decoded key: $decoded_key"
-            decoded_keys="${decoded_keys}${decoded_key}$(printf '\n')"
-        done < <(echo "$response" | jq -r '.kvs[].key')
+        done
+        return 0
     else
-        # Extract using grep/sed with detailed logging
-        log "DEBUG" "JQ not available, falling back to grep/sed extraction"
-        
-        # Process each key from grep extraction
-        while read -r base64_key; do
-            log "DEBUG" "Processing encoded key from grep: $base64_key"
-            
-            # Explicitly decode with error checking
-            local decoded_key=""
-            decoded_key=$(echo -n "$base64_key" | base64 -d 2>/dev/null)
-            local decode_status=$?
-            
-            if [ $decode_status -ne 0 ]; then
-                log "WARNING" "Base64 decoding failed for key: $base64_key"
-                continue
+        log "DEBUG" "Fallback to grep for key extraction"
+        # Fix: Process each key separately with newlines
+        echo "$response" | grep -o '"key":"[^"]*"' | cut -d'"' -f4 | while read -r base64_key; do
+            if [ -n "$base64_key" ]; then
+                decoded_key=$(_etcd_base64_decode "$base64_key" 2>/dev/null)
+                if [ -n "$decoded_key" ]; then
+                    echo "$decoded_key"
+                fi
             fi
-            
-            if [ -z "$decoded_key" ]; then
-                log "WARNING" "Decoded key is empty for: $base64_key"
-                continue
-            fi
-            
-            log "DEBUG" "Successfully decoded key: $decoded_key"
-            decoded_keys="${decoded_keys}${decoded_key}$(printf '\n')"
-        done < <(echo "$response" | grep -o '"key":"[^"]*"' | cut -d'"' -f4)
+        done
+        return 0
     fi
-    
-    # Check if any keys were processed
-    if [ -z "$decoded_keys" ]; then
-        log "WARNING" "No keys were successfully processed despite having keys in response"
-        return 1
-    fi
-
-    # Add near the end of _etcd_v3_list_keys function, just before returning
-    log "DEBUG" "Keys returned from _etcd_v3_list_keys (count: $(echo "$decoded_keys" | wc -l)): "
-    log "DEBUG" "First few keys: $(echo "$decoded_keys" | head -3)"
-    log "DEBUG" "Raw decoded_keys output format: $(echo "$decoded_keys" | od -c | head -3)"
-    
-    # Return the decoded keys
-    echo "$decoded_keys"
-    return 0
 }
 
 
