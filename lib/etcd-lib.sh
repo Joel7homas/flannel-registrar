@@ -188,8 +188,9 @@ _etcd_v3_put() {
 _etcd_v3_get() {
     local key="$1"
     
-    # Validate the key is a single entity - not multiple keys
-    if [[ "$key" == *"/"*"/"* ]] && [[ $(echo "$key" | grep -o "/" | wc -l) -gt 2 ]]; then
+    # Improved validation that detects actual concatenated keys
+    # A concatenated key would have multiple occurrences of the same path pattern
+    if [[ "$key" =~ /coreos\.com/network/subnets/[^/]+/coreos\.com/network ]]; then
         log "WARNING" "Attempted to get multiple keys in a single request: $key"
         log "WARNING" "This operation is not supported. Please query keys individually."
         return 1
