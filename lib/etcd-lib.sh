@@ -193,7 +193,7 @@ _etcd_v3_get() {
         log "WARNING" "Attempted to get multiple keys in a single request: $key"
         log "WARNING" "This operation is not supported. Please query keys individually."
         return 1
-    }
+    fi
     
     local base64_key=$(_etcd_base64_encode "$key")
     
