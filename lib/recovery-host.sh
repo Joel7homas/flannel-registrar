@@ -195,7 +195,7 @@ create_host_status_key() {
         return 1
     fi
     
-    echo "${FLANNEL_CONFIG_PREFIX}/_host_status/$host"
+    echo "${FLANNEL_CONFIG_PREFIX}/subnets/_host_status/$host"
     return 0
 }
 
@@ -264,7 +264,7 @@ get_all_active_hosts() {
     # Get all host status keys using a direct curl call to ensure it works
     log "DEBUG" "Retrieving all host status keys using direct etcd access"
     local etcd_url="${ETCD_ENDPOINT}/v3/kv/range"
-    local prefix="${FLANNEL_CONFIG_PREFIX}/_host_status/"
+    local prefix="${FLANNEL_CONFIG_PREFIX}/subnets/_host_status/"
     local base64_prefix=$(echo -n "$prefix" | base64 -w 0)
     local base64_end=$(echo -n "${prefix}\xff" | base64 -w 0)
     local payload="{\"key\":\"$base64_prefix\",\"range_end\":\"$base64_end\",\"keys_only\":true}"
@@ -347,6 +347,8 @@ get_all_active_hosts() {
             fi
             
             log "DEBUG" "Found keys at alternative path: ($status_keys)"
+            log "WARNING" "Found host status entries in legacy path. Consider migrating data to standardized path."
+
         fi
     fi
     
@@ -495,7 +497,7 @@ clean_stale_host_status() {
         if [ -n "$key" ]; then
             status_keys+=" $key"
         fi
-    done < <(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/_host_status/")
+    done < <(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/subnets/_host_status/")
     
     if [ -z "$status_keys" ]; then
         log "DEBUG" "No host status entries found to clean up"

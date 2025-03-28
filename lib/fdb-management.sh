@@ -164,7 +164,7 @@ update_fdb_entries_from_etcd() {
   fi
   
   # Get all host status entries to find MAC addresses
-  local status_keys=$(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/_host_status/")
+  local status_keys=$(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/subnets/_host_status/")
   local host_macs=()
   local host_names=()
   
@@ -402,7 +402,7 @@ troubleshoot_vxlan() {
     
     # Get MAC address from etcd for this IP
     local mac=""
-    for key in $(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/_host_status/"); do
+    for key in $(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/subnets/_host_status/"); do
       local status_data=$(etcd_get "$key")
       
       if [ -n "$status_data" ]; then

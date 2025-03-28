@@ -557,8 +557,8 @@ initialize_etcd() {
         log "INFO" "Checking for and cleaning up malformed entries..."
         
         # Find any keys containing timestamps or other obvious malformed patterns
-        local malformed_key_base64=$(_etcd_base64_encode "${FLANNEL_CONFIG_PREFIX}/[")
-        local range_end_base64=$(_etcd_base64_encode "${FLANNEL_CONFIG_PREFIX}/\\")
+        local malformed_key_base64=$(_etcd_base64_encode "${FLANNEL_CONFIG_PREFIX}/subnets/[")
+        local range_end_base64=$(_etcd_base64_encode "${FLANNEL_CONFIG_PREFIX}/subnets/\\")
         local payload="{\"key\":\"$malformed_key_base64\",\"range_end\":\"$range_end_base64\",\"keys_only\":true}"
         
         local response=$(curl -s -X POST -m "$ETCD_TIMEOUT" \

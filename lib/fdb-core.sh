@@ -322,13 +322,13 @@ update_fdb_entries_from_etcd() {
         log "DEBUG" "Falling back to direct etcd access for host status"
         
         # Get all host status entries to find MAC addresses
-        log "DEBUG" "Retrieving host status entries from etcd: (${FLANNEL_CONFIG_PREFIX}/_host_status/)"
+        log "DEBUG" "Retrieving host status entries from etcd: (${FLANNEL_CONFIG_PREFIX}/subnets/_host_status/)"
         local status_keys=()
         while read -r key; do
             if [ -n "$key" ]; then
                 status_keys+=("$key")
             fi
-        done < <(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/_host_status/")
+        done < <(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/subnets/_host_status/")
         
         log "DEBUG" "Found ${#status_keys[@]} host status keys in etcd"
         
@@ -344,7 +344,7 @@ update_fdb_entries_from_etcd() {
                     if [ -n "$key" ]; then
                         status_keys+=("$key")
                     fi
-                done < <(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/_host_status/")
+                done < <(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/subnets/_host_status/")
             elif type register_host_as_active &>/dev/null; then
                 log "INFO" "Attempting to register local host status as fallback using recovery-host"
                 register_host_as_active
@@ -353,7 +353,7 @@ update_fdb_entries_from_etcd() {
                     if [ -n "$key" ]; then
                         status_keys+=("$key")
                     fi
-                done < <(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/_host_status/")
+                done < <(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/subnets/_host_status/")
             fi
         fi
         

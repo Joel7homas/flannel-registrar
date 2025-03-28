@@ -12,7 +12,7 @@ set -e
 # Etcd configuration
 ETCD_ENDPOINT="${ETCD_ENDPOINT:-http://192.168.4.88:2379}"
 FLANNEL_PREFIX="${FLANNEL_PREFIX:-/coreos.com/network}"
-FLANNEL_CONFIG_PREFIX="${FLANNEL_CONFIG_PREFIX:-/flannel/network/subnets}"
+FLANNEL_CONFIG_PREFIX="${FLANNEL_CONFIG_PREFIX:-/flannel/network}"
 ETCDCTL_API="${ETCDCTL_API:-3}"  # Default to etcd v3 API
 
 # Operation configuration
@@ -76,6 +76,60 @@ _log() {
       echo "$timestamp - $message"
       ;;
   esac
+}
+
+# ==========================================
+# Initialization functions
+# ==========================================
+
+migrate_host_status_data() {
+    log "INFO" "Checking for host status data migration needs"
+    
+    # Check old paths
+    local old_coreos_path="/coreos.com/network/subnets/_host_status/"
+    local old_flannel_path="/flannel/network/subnets/_host_status/"
+    local new_path="${FLANNEL_CONFIG_PREFIX}/subnets/_host_status/"
+    
+    # Skip if paths are the same
+    if [ "$old_flannel_path" = "$new_path" ]; then
+        log "DEBUG" "No migration needed - paths are identical"
+        return 0
+    fi
+    
+    # Migrate from old coreos path if data exists
+    local count=0
+    while read -r key; do
+        if [ -n "$key" ]; then
+            local host=$(basename "$key")
+            local value=$(etcd_get "$key")
+            if [ -n "$value" ]; then
+                local new_key="${new_path}${host}"
+                etcd_put "$new_key" "$value"
+                log "INFO" "Migrated host status from $key to $new_key"
+                count=$((count + 1))
+            fi
+        fi
+    done < <(etcd_list_keys "$old_coreos_path" 2>/dev/null)
+    
+    # Migrate from old flannel path if data exists
+    while read -r key; do
+        if [ -n "$key" ]; then
+            local host=$(basename "$key")
+            local value=$(etcd_get "$key")
+            if [ -n "$value" ]; then
+                local new_key="${new_path}${host}"
+                etcd_put "$new_key" "$value"
+                log "INFO" "Migrated host status from $key to $new_key"
+                count=$((count + 1))
+            fi
+        fi
+    done < <(etcd_list_keys "$old_flannel_path" 2>/dev/null)
+    
+    if [ $count -gt 0 ]; then
+        log "INFO" "Completed migration of $count host status entries"
+    else
+        log "DEBUG" "No host status entries needed migration"
+    fi
 }
 
 # ==========================================
@@ -527,7 +581,7 @@ main() {
         fi
 
         # Always register in our own namespace
-        etcd_put "${FLANNEL_CONFIG_PREFIX}/${network_name}" "$subnet" || \
+        etcd_put "${FLANNEL_CONFIG_PREFIX}/subnets/${network_name}" "$subnet" || \
             log "ERROR" "Failed to register in ${FLANNEL_CONFIG_PREFIX}"
 
       fi
@@ -548,6 +602,8 @@ main() {
         log "WARNING" "No subnets found in etcd"
     fi
   fi
+
+  migrate_host_status_data
   
   # Add routes for all subnets
   log "INFO" "Setting up routes to flannel subnets"

@@ -192,7 +192,7 @@ check_stale_fdb_entries() {
     local valid_macs=()
     local valid_dsts=()
     
-    for key in $(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/_host_status/"); do
+    for key in $(etcd_list_keys "${FLANNEL_CONFIG_PREFIX}/subnets/_host_status/"); do
         local host=$(basename "$key")
         local status_data=$(etcd_get "$key")
         [ -z "$status_data" ] && continue

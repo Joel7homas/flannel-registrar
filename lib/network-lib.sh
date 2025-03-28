@@ -453,7 +453,7 @@ register_host_status() {
     local status_data="{\"hostname\":\"$hostname\",\"vtep_mac\":\"$vtep_mac\",\"primary_ip\":\"$primary_ip\",\"timestamp\":$timestamp}"
     
     # Write to etcd
-    local status_key="${FLANNEL_CONFIG_PREFIX}/_host_status/$hostname"
+    local status_key="${FLANNEL_CONFIG_PREFIX}/subnets/_host_status/$hostname"
     if ! etcd_put "$status_key" "$status_data"; then
         log "ERROR" "Failed to register host status in etcd"
         return 1
