@@ -533,6 +533,66 @@ has_flannel_onlink_route() {
 # Core route management functions
 # ==========================================
 
+# Ensure routes exist between registered hosts
+ensure_host_routes() {
+    log "INFO" "Ensuring host-to-host routes exist for indirect routing"
+    
+    # Skip if HOST_GATEWAY_MAP is not defined
+    if [ -z "$HOST_GATEWAY_MAP" ]; then
+        log "DEBUG" "No HOST_GATEWAY_MAP defined, skipping host route configuration"
+        return 0
+    fi
+    
+    local success=0
+    
+    # Process the HOST_GATEWAY_MAP to ensure routes between hosts
+    IFS=',' read -ra MAP_ENTRIES <<< "$HOST_GATEWAY_MAP"
+    for entry in "${MAP_ENTRIES[@]}"; do
+        IFS=':' read -r remote_host gateway <<< "$entry"
+        
+        # Skip empty entries
+        if [ -z "$remote_host" ] || [ -z "$gateway" ]; then
+            continue
+        fi
+        
+        # Extract the network from the remote host for the route
+        local remote_network=$(echo "$remote_host" | cut -d. -f1-3).0/24
+        
+        # Check if the route already exists
+        if ip route show | grep -q "$remote_network via $gateway"; then
+            log "DEBUG" "Host route already exists for $remote_network via $gateway"
+            success=$((success + 1))
+        else
+            log "INFO" "Adding host route for $remote_network via $gateway"
+            
+            # Get the right interface
+            local gateway_iface=$(ip route get $gateway 2>/dev/null | grep -o 'dev [^ ]*' | cut -d' ' -f2 || echo "")
+            
+            if [ -n "$gateway_iface" ]; then
+                # Add the route with the explicit interface
+                if ip route add "$remote_network" via "$gateway" dev "$gateway_iface"; then
+                    log "INFO" "Successfully added host route for $remote_network via $gateway"
+                    success=$((success + 1))
+                else
+                    log "ERROR" "Failed to add host route for $remote_network via $gateway dev $gateway_iface"
+                fi
+            else
+                # Try without explicit interface
+                if ip route add "$remote_network" via "$gateway"; then
+                    log "INFO" "Successfully added host route for $remote_network via $gateway"
+                    success=$((success + 1))
+                else
+                    log "ERROR" "Failed to add host route for $remote_network via $gateway"
+                fi
+            fi
+        fi
+    done
+    
+    log "INFO" "Host route configuration completed: $success routes configured"
+    return 0
+}
+
+
 # Ensure routes exist for all registered networks
 # Usage: ensure_flannel_routes
 ensure_flannel_routes() {
@@ -546,6 +606,9 @@ ensure_flannel_routes() {
     
     log "INFO" "Ensuring routes exist for all registered flannel networks"
     ROUTES_LAST_UPDATE_TIME=$current_time
+    
+    # First, ensure host-to-host routes exist (NEW LINE)
+    ensure_host_routes
     
     # Log flannel route management mode
     if [ "$MANAGE_FLANNEL_ROUTES" = "true" ]; then
@@ -1153,7 +1216,8 @@ get_route_summary() {
 
 # Export necessary functions and variables
 export -f init_routes_core backup_routes restore_routes_from_backup
-export -f parse_extra_routes ensure_flannel_routes verify_routes get_route_summary
+export -f parse_extra_routes ensure_flannel_routes ensure_host_routes
+export -f verify_routes get_route_summary
 export -f is_valid_route_ip is_valid_route_cidr is_valid_route_interface
 export -f is_flannel_route has_flannel_onlink_route
 export -f is_flannel_route has_flannel_onlink_route log_flannel_route_inventory
